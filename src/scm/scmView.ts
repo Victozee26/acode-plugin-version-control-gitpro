@@ -1,4 +1,5 @@
 import { config } from "../base/config";
+import { decorationService } from "../base/decorationService";
 import { Disposable, DisposableMap, DisposableStore, IDisposable } from "../base/disposable";
 import { Emitter, Event } from "../base/event";
 import { CollapsableList, IListContextMenuEvent, IListDelegate, IListMouseEvent, IListRenderer } from "../base/list";
@@ -274,9 +275,11 @@ class ResourceRenderer implements IListRenderer<ISCMResource | IResourceNode<ISC
         }));
       }
 
-      if (resourceOrFolder.decorations.letter) {
-        templateData.letter.textContent = resourceOrFolder.decorations.letter;
-        if (resourceOrFolder.decorations.color) templateData.letter.style.color = resourceOrFolder.decorations.color;
+      const decoration = decorationService.getDecoration(uri);
+
+      if (decoration?.badge) {
+        templateData.letter.textContent = decoration.badge;
+        if (decoration.color) templateData.letter.style.color = decoration.color;
       }
     }
 
@@ -817,7 +820,7 @@ export class SCMView extends Disposable.Disposable implements IView {
       this.toggleResourceGroup(e.element);
       return;
     } else if (isSCMResource(e.element)) {
-      return;
+      e.element.open();
     } else if (isSCMResourceNode(e.element)) {
       const node = e.element;
       if (this.expandedNodes.has(node)) {

@@ -1,13 +1,15 @@
 import plugin from '../plugin.json';
 import { App } from './base/app';
 import { config } from './base/config';
+import { decorationService } from './base/decorationService';
 import { Disposable, IDisposable } from './base/disposable';
 import { Event } from './base/event';
+import { registerFilesDecorations } from './base/fileDecoration';
 import { GitPluginImpl } from './git/api/plugin';
 import { AskPass } from './git/askpass';
 import { CommandCenter } from './git/commands';
 import { GitDecorations } from './git/decorationProvider';
-import { AcodeFileDecorationService } from './git/fileDecorationService';
+import { GitFileSystem, GitFileSystemProvider } from './git/fileSystemProvider';
 import { findGit, Git, IGit } from './git/git';
 import { GitEditor } from './git/gitEditor';
 import { createIPCServer, IIPCServer } from './git/ipc/ipcServer';
@@ -17,7 +19,7 @@ import { joinUrl } from './git/utils';
 import { scm, SCMMenuContext, SCMMenuRegistry } from './scm';
 import { SourceControlViewContainer } from './scm/api/sourceControl';
 
-const fs = acode.require('fs');
+const fsOperation = acode.require('fs');
 const Url = acode.require('Url');
 
 const ALPINE_HOME = `/data/user/0/${window.BuildInfo.packageName}/files/alpine/home`;
@@ -81,7 +83,10 @@ const defaultGitConfig: IGitConfig = {
 	detectSubmodules: true,
 	detectSubmodulesLimit: 10,
 	useInotifywait: true,
-	decorationsEnabled: true
+	decorationsEnabled: true,
+	promptToSaveFilesBeforeStash: 'always',
+	useCommitInputAsStashMessage: false,
+	openDiffOnClick: true
 }
 
 async function destroy() {
@@ -156,12 +161,19 @@ async function createModel(logger: LogOutputChannel, disposables: IDisposable[])
 		logger.info(lines.join('\n'));
 	}, git, disposables);
 
-	const decorationServics = new AcodeFileDecorationService();
-	disposables.push(decorationServics);
-	disposables.push(new CommandCenter(git, model, logger));
-	disposables.push(new GitDecorations(model, decorationServics));
+	const gitFs = new GitFileSystem(model, logger);
+	disposables.push(
+		gitFs,
+		decorationService,
+		new CommandCenter(git, model, logger),
+		new GitDecorations(model)
+	);
+
+	fsOperation.extend(GitFileSystemProvider.test, (url) => new GitFileSystemProvider(url, gitFs));
+	disposables.push(Disposable.toDisposable(() => fsOperation.remove(GitFileSystemProvider.test)));
 
 	checkGitVersion(info);
+	App.setContext('gitVersion2.35', git.compareGitVersionTo('2.35') >= 0);
 
 	return model;
 }
@@ -170,7 +182,7 @@ async function isGitRepository(folder: Acode.Folder): Promise<boolean> {
 	const dotGit = joinUrl(folder.url, '.git');
 
 	try {
-		const dotGitStat = await fs(dotGit).stat();
+		const dotGitStat = await fsOperation(dotGit).stat();
 		return dotGitStat.isDirectory;
 	} catch (e) {
 		return false;
@@ -206,8 +218,8 @@ async function warnAboutMissingGit(): Promise<void> {
 }
 
 async function setupDirectory() {
-	const homeFs = fs(`file://${ALPINE_HOME}`);
-	const vcgitFs = fs(`file://${ALPINE_HOME}/.vcgit`);
+	const homeFs = fsOperation(`file://${ALPINE_HOME}`);
+	const vcgitFs = fsOperation(`file://${ALPINE_HOME}/.vcgit`);
 	if (!await vcgitFs.exists()) {
 		await homeFs.createDirectory('.vcgit');
 	}
@@ -218,19 +230,20 @@ async function initialize(baseUrl: string, options: Acode.PluginInitOptions): Pr
 	await config.init('vcgit', defaultGitConfig);
 	disposables.push(config);
 
-	acode.addIcon('branch', baseUrl + 'assets/branch.svg');
-	acode.addIcon('sync', baseUrl + 'assets/sync.svg');
-	acode.addIcon('cloud-upload', baseUrl + 'assets/cloud-upload.svg');
-	acode.addIcon('debug-disconnect', baseUrl + 'assets/debug-disconnect.svg');
-	acode.addIcon('tag', baseUrl + 'assets/tag.svg');
-	acode.addIcon('loading', baseUrl + 'assets/loading.svg');
-	acode.addIcon('git-commit', baseUrl + 'assets/git-commit.svg');
+	acode.addIcon('branch', baseUrl + 'assets/branch.svg', { monochrome: true });
+	acode.addIcon('sync', baseUrl + 'assets/sync.svg', { monochrome: true });
+	acode.addIcon('cloud-upload', baseUrl + 'assets/cloud-upload.svg', { monochrome: true });
+	acode.addIcon('debug-disconnect', baseUrl + 'assets/debug-disconnect.svg', { monochrome: true });
+	acode.addIcon('tag', baseUrl + 'assets/tag.svg', { monochrome: true });
+	acode.addIcon('loading', baseUrl + 'assets/loading.svg', { monochrome: true });
+	acode.addIcon('git-commit', baseUrl + 'assets/git-commit.svg', { monochrome: true });
 	const styles = tag('link', { rel: 'stylesheet', href: baseUrl + 'main.css' });
 	document.head.appendChild(styles);
 	disposables.push(Disposable.toDisposable(() => styles.remove()));
 
 	const scmViewContainer = scm.getViewContainer();
 	initializeViews(scmViewContainer);
+	disposables.push(registerFilesDecorations());
 
 	if (!await Terminal.isInstalled()) {
 		App.setContext('acode.terminalMissing', true);
@@ -445,8 +458,14 @@ function initializeMenus(logger: LogOutputChannel): void {
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git'
 		},
 		{
-			command: { id: 'git.tags', title: 'Tags' },
+			command: { id: 'git.stash', title: 'Stash' },
 			group: '2_main@5',
+			submenu: true,
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git'
+		},
+		{
+			command: { id: 'git.tags', title: 'Tags' },
+			group: '2_main@6',
 			submenu: true,
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git'
 		},
@@ -509,24 +528,12 @@ function initializeMenus(logger: LogOutputChannel): void {
 	// Resource States
 	SCMMenuRegistry.registerMenuItems('scm/resourceState/context', [
 		{
-			command: { id: 'git.stage', title: 'Stage Changes' },
-			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'merge',
-			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+			command: { id: 'git.openChange', title: 'Open Changes' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'index'
 		},
 		{
-			command: { id: 'git.stage', title: 'Stage Changes' },
-			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'workingTree',
-			enablement: () => !App.getContext<boolean>('git.operationInProgress')
-		},
-		{
-			command: { id: 'git.stage', title: 'Stage Changes' },
-			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'untracked',
-			enablement: () => !App.getContext<boolean>('git.operationInProgress')
-		},
-		{
-			command: { id: 'git.unstage', title: 'Unstage Changes' },
-			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'index',
-			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+			command: { id: 'git.openChange', title: 'Open Changes' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'workingTree'
 		},
 		{
 			command: { id: 'git.openFile', title: 'Open File' },
@@ -546,6 +553,28 @@ function initializeMenus(logger: LogOutputChannel): void {
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'untracked'
 		},
 		{
+			command: { id: 'git.openHEADFile', title: 'Open File (HEAD)' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'index'
+		},
+		{
+			command: { id: 'git.openHEADFile', title: 'Open File (HEAD)' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'workingTree'
+		},
+		{
+			command: { id: 'git.openHEADFile', title: 'Open File (HEAD)' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'untracked'
+		},
+		{
+			command: { id: 'git.stage', title: 'Stage Changes' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'merge',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		},
+		{
+			command: { id: 'git.stage', title: 'Stage Changes' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'workingTree',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		},
+		{
 			command: { id: 'git.clean', title: 'Discard Change' },
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'workingTree',
 			enablement: () => !App.getContext<boolean>('git.operationInProgress')
@@ -555,6 +584,16 @@ function initializeMenus(logger: LogOutputChannel): void {
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'untracked',
 			enablement: () => !App.getContext<boolean>('git.operationInProgress')
 		},
+		{
+			command: { id: 'git.stage', title: 'Stage Changes' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'untracked',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		},
+		{
+			command: { id: 'git.unstage', title: 'Unstage Changes' },
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'index',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		}
 	]);
 
 	SCMMenuRegistry.registerMenuItems('scm/resourceFolder/context', [
@@ -766,6 +805,57 @@ function initializeMenus(logger: LogOutputChannel): void {
 		}
 	]);
 
+	// Stash
+	SCMMenuRegistry.registerMenuItems('git.stash', [
+		{
+			command: { id: 'git.stash', title: 'Stash' },
+			group: '1_stash@1',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		},
+		{
+			command: { id: 'git.stashIncludeUntracked', title: 'Stash (Include Untracked)' },
+			group: '1_stash@2',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		},
+		{
+			command: { id: 'git.stashStaged', title: 'Stash Staged' },
+			group: '1_stash@3',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+			when: () => App.getContext<boolean>('gitVersion2.35') === true
+		},
+		{
+			command: { id: 'git.stashApplyLatest', title: 'Apply Latest Stash' },
+			group: '2_apply@1',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+		},
+		{
+			command: { id: 'git.stashApply', title: 'Apply Stash...' },
+			group: '2_apply@2',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+		},
+		{
+			command: { id: 'git.stashPopLatest', title: 'Pop Latest Stash' },
+			group: '3_pop@1',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+		},
+		{
+			command: { id: 'git.stashPop', title: 'Pop Stash...' },
+			group: '3_pop@2',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+		},
+		{
+			command: { id: 'git.stashDrop', title: 'Drop Stash...' },
+			group: '4_drop@1',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+		},
+		{
+			command: { id: 'git.stashDropAll', title: 'Drop All Stashes...' },
+			group: '4_drop@2',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+		}
+	]);
+
+	// Tags
 	SCMMenuRegistry.registerMenuItems('git.tags', [
 		{
 			command: { id: 'git.createTag', title: 'Create Tag...' },
@@ -1169,6 +1259,25 @@ function gitPluginSettings(): Acode.PluginSettings {
 				checkbox: configs.decorationsEnabled,
 				text: 'Git: Decorations',
 				info: 'Controls whether Git contributes colors and badges to the Explorer and the Open Editors view.'
+			},
+			{
+				key: 'promptToSaveFilesBeforeStash',
+				value: configs.promptToSaveFilesBeforeStash,
+				select: ['always', 'staged', 'never'],
+				text: 'Git: Prompt To Save Files Before Stash',
+				info: 'Controls whether Git should check for unsaved files before stashing changes.'
+			},
+			{
+				key: 'useCommitInputAsStashMessage',
+				value: configs.useCommitInputAsStashMessage,
+				text: 'Git: Use Commit Input As Stash Message',
+				info: 'Controls whether to use the message from the commit input box as the default stash message.'
+			},
+			{
+				key: 'openDiffOnClick',
+				checkbox: configs.openDiffOnClick,
+				text: 'Git: Open Diff On Click',
+				info: 'Controls whether the diff editor should be opened when clicking a change. Otherwise the regular editor will be opened.'
 			}
 		],
 		cb(key: string, value: unknown) {

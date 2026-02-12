@@ -1,24 +1,3 @@
-declare const app: HTMLBodyElement;
-declare const strings: { [key: string]: string };
-declare const Terminal: Terminal;
-declare const Executor: Executor;
-declare const system: any;
-
-interface Terminal {
-  isInstalled(): Promise<boolean>;
-}
-
-interface Executor {
-  execute(command: string, alpine?: boolean): Promise<string>;
-  /**
-   * @returns uuid
-   */
-  start(command: string, onData: (type: string, data: string) => void, alpine?: boolean): Promise<string>;
-  isRunning(uuid: string): Promise<boolean>;
-  write(uuid: string, input: string): Promise<void>;
-  stop(uuid: string): Promise<void>;
-}
-
 interface ISCMConfig {
   readonly inputMaxLineCount: number;
   readonly inputMinLineCount: number;
@@ -86,6 +65,9 @@ interface IGitConfig {
   readonly detectSubmodulesLimit: number;
   readonly useInotifywait: boolean;
   readonly decorationsEnabled: boolean;
+  readonly promptToSaveFilesBeforeStash: 'always' | 'staged' | 'never';
+  readonly useCommitInputAsStashMessage: boolean;
+  readonly openDiffOnClick: boolean;
 }
 
 declare namespace Acode {
@@ -99,4 +81,19 @@ interface Window {
   BuildInfo: {
     packageName: string;
   }
+}
+
+declare module 'diff' {
+  interface Change {
+    value: string;
+    added: boolean;
+    removed: boolean;
+    count: number;
+  }
+
+  export function diffLines(
+    oldStr: string,
+    newStr: string,
+    options?: { newlineIsToken?: boolean }
+  ): Change[];
 }

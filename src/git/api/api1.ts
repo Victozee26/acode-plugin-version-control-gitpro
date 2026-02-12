@@ -1,10 +1,11 @@
-import { IDisposable } from "../../base/disposable";
+import { Disposable, IDisposable } from "../../base/disposable";
 import { Event } from "../../base/event";
 import { SourceControl, SourceControlInputBox } from "../../scm/api/sourceControl";
 import { Model } from "../model";
 import { OperationKind, OperationResult } from "../operation";
 import { Repository as BaseRepository, Resource } from "../repository";
-import { API, APIState, Branch, BranchQuery, Change, Commit, CommitOptions, CredentialsProvider, FetchOptions, ForcePushMode, Git, GitErrorCodes, InitOptions, InputBox, LogOptions, PublishEvent, PushErrorHandler, Ref, RefQuery, Remote, RemoteSourcePublisher, Repository, RepositoryState, RepositoryUIState, Status, Submodule } from "./git";
+import { toGitUri } from "../uri";
+import { API, APIState, Branch, BranchQuery, Change, Commit, CommitOptions, CredentialsProvider, FetchOptions, ForcePushMode, Git, GitErrorCodes, InitOptions, InputBox, LogOptions, PickRemoteSourceOptions, PublishEvent, PushErrorHandler, Ref, RefQuery, Remote, RemoteSourceProvider, RemoteSourcePublisher, Repository, RepositoryState, RepositoryUIState, Status, Submodule } from "./git";
 
 class ApiInputBox implements InputBox {
   #inputBox: SourceControlInputBox;
@@ -105,6 +106,14 @@ export class ApiRepository implements Repository {
     return this.#repository.getGlobalConfig(key);
   }
 
+  getObjectDetails(treeish: string, path: string): Promise<{ mode: string; object: string; size: number }> {
+    return this.#repository.getObjectDetails(treeish, path);
+  }
+
+  buffer(ref: string, path: string): Promise<any> {
+    return this.#repository.buffer(ref, path);
+  }
+
   getCommit(ref: string): Promise<Commit> {
     return this.#repository.getCommit(ref);
   }
@@ -119,6 +128,18 @@ export class ApiRepository implements Repository {
 
   clean(paths: string[]): Promise<void> {
     return this.#repository.clean(paths);
+  }
+
+  diffWithHEAD(): Promise<Change[]>;
+  diffWithHEAD(path: string): Promise<string>;
+  diffWithHEAD(path?: string): Promise<string | Change[]> {
+    return this.#repository.diffWithHEAD(path);
+  }
+
+  diffIndexWithHEAD(): Promise<Change[]>;
+  diffIndexWithHEAD(path: string): Promise<string>;
+  diffIndexWithHEAD(path?: string): Promise<string | Change[]> {
+    return this.#repository.diffIndexWithHEAD(path);
   }
 
   createBranch(name: string, checkout: boolean, ref?: string): Promise<void> {
@@ -266,6 +287,10 @@ export class ApiImpl implements API {
     return this.#model.repositories.map(r => new ApiRepository(r));
   }
 
+  toGitUri(uri: string, ref: string): string {
+    return toGitUri(uri, ref);
+  }
+
   getRepository(uri: string): Repository | null {
     const result = this.#model.getRepository(uri);
     return result ? new ApiRepository(result) : null;
@@ -303,15 +328,30 @@ export class ApiImpl implements API {
     return this.getRepository(root) || null;
   }
 
-  registerRemoteSourcePublisher(publisher: RemoteSourcePublisher) {
-    this.#model.registerRemoteSourcePublisher(publisher);
+  registerRemoteSourcePublisher(publisher: RemoteSourcePublisher): IDisposable {
+    return this.#model.registerRemoteSourcePublisher(publisher);
+  }
+
+  registerRemoteSourceProvider(provider: RemoteSourceProvider): IDisposable {
+    const disposables: IDisposable[] = [];
+
+    if (provider.publishRepository) {
+      disposables.push(this.#model.registerRemoteSourcePublisher(provider as RemoteSourcePublisher));
+    }
+    disposables.push(this.#model.registerRemoteSourceProvider(provider));
+
+    return Disposable.create(...disposables);
+  }
+
+  async pickRemoteSource(options: PickRemoteSourceOptions): Promise<string | undefined> {
+    return await this.#model.pickRemoteSource(options);
   }
 
   registerCredentialsProvider(provider: CredentialsProvider): IDisposable {
     return this.#model.registerCredentialsProvider(provider);
   }
 
-  registerPushErrorHandler(handler: PushErrorHandler) {
-    this.#model.registerPushErrorHandler(handler);
+  registerPushErrorHandler(handler: PushErrorHandler): IDisposable {
+    return this.#model.registerPushErrorHandler(handler);
   }
 }

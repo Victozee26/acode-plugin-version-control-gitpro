@@ -1,12 +1,11 @@
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
+/**
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT License.
+*/
 
+import { IDisposable } from "../../base/disposable";
 import { Event } from "../../base/event";
 import { SourceControlCommandAction } from "../../scm/api/sourceControl";
-
-export type ProviderResult<T> = T | undefined | null | Thenable<T | undefined | null>;
 
 export interface Git {
 	readonly path: string;
@@ -103,12 +102,6 @@ export const enum Status {
 }
 
 export interface Change {
-
-	/**
-	 * Returns either `originalUri` or `renameUri`, depending
-	 * on whether this change is a rename change. When
-	 * in doubt always use `uri` over the other two alternatives.
-	 */
 	readonly uri: string;
 	readonly originalUri: string;
 	readonly renameUri: string | undefined;
@@ -204,6 +197,8 @@ export interface Repository {
 	unsetConfig(key: string): Promise<string>;
 	getGlobalConfig(key: string): Promise<string>;
 
+	getObjectDetails(treeish: string, path: string): Promise<{ mode: string, object: string, size: number }>;
+	buffer(ref: string, path: string): Promise<any>;
 	getCommit(ref: string): Promise<Commit>;
 
 	add(paths: string[]): Promise<void>;
@@ -211,6 +206,10 @@ export interface Repository {
 	clean(paths: string[]): Promise<void>;
 
 	apply(patch: string, reverse?: boolean): Promise<void>;
+	diffWithHEAD(): Promise<Change[]>;
+	diffWithHEAD(path: string): Promise<string>;
+	diffIndexWithHEAD(): Promise<Change[]>;
+	diffIndexWithHEAD(path: string): Promise<string>;
 
 	createBranch(name: string, checkout: boolean, ref?: string): Promise<void>;
 	deleteBranch(name: string, force?: boolean): Promise<void>;
@@ -247,7 +246,23 @@ export interface Repository {
 export interface RemoteSource {
 	readonly name: string;
 	readonly description?: string;
+	readonly detail?: string;
+	readonly icon?: string;
 	readonly url: string | string[];
+}
+
+export interface RemoteSourceProvider {
+	readonly name: string;
+	readonly icon?: string;
+	readonly placeholder?: string;
+	readonly supportsQuery?: boolean;
+	getRemoteSources(query?: string): Promise<RemoteSource[]>;
+	publishRepository?(repository: Repository): Promise<void>;
+}
+
+export interface PickRemoteSourceOptions {
+	readonly providerLabel?: (provider: RemoteSourceProvider) => string;
+	readonly urlLabel?: string;
 }
 
 export interface RemoteSourcePublisher {
@@ -262,7 +277,7 @@ export interface Credentials {
 }
 
 export interface CredentialsProvider {
-	getCredentials(host: string): ProviderResult<Credentials>;
+	getCredentials(host: string): Promise<Credentials | undefined>;
 }
 
 export interface PushErrorHandler {
@@ -300,30 +315,21 @@ export interface API {
 	readonly onDidOpenRepository: Event<Repository>;
 	readonly onDidCloseRepository: Event<Repository>;
 
+	toGitUri(uri: string, ref: string): string;
 	getRepository(uri: string): Repository | null;
 	getRepositoryRoot(uri: string): Promise<string | null>;
 	init(root: string, options?: InitOptions): Promise<Repository | null>;
 	openRepository(root: string): Promise<Repository | null>;
-	registerRemoteSourcePublisher(publisher: RemoteSourcePublisher): Disposable;
-	registerCredentialsProvider(provider: CredentialsProvider): Disposable;
-	registerPushErrorHandler(handler: PushErrorHandler): Disposable;
+	registerRemoteSourcePublisher(publisher: RemoteSourcePublisher): IDisposable;
+	registerRemoteSourceProvider(provider: RemoteSourceProvider): IDisposable;
+	registerCredentialsProvider(provider: CredentialsProvider): IDisposable;
+	registerPushErrorHandler(handler: PushErrorHandler): IDisposable;
+	pickRemoteSource(options: PickRemoteSourceOptions): Promise<string | undefined>;
 }
 
 export interface GitExtension {
-
 	readonly enabled: boolean;
 	readonly onDidChangeEnablement: Event<boolean>;
-
-	/**
-	 * Returns a specific API version.
-	 *
-	 * Throws error if git extension is disabled. You can listen to the
-	 * [GitExtension.onDidChangeEnablement](#GitExtension.onDidChangeEnablement) event
-	 * to know when the extension becomes enabled/disabled.
-	 *
-	 * @param version Version number.
-	 * @returns API instance
-	 */
 	getAPI(version: 1): API;
 }
 

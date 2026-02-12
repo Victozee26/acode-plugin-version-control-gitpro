@@ -1,42 +1,31 @@
-import { Disposable, IDisposable } from "../base/disposable";
 import { config } from "../base/config";
-import { isUri, uriToPath } from "../base/uri";
+import { Disposable, IDisposable } from "../base/disposable";
+import { toFileUrl, uriToPath } from "../base/uri";
 import { SourceControl, SourceControlResourceState } from "../scm/api/sourceControl";
 import { ApiRepository } from "./api/api1";
 import { Branch, CommitOptions, ForcePushMode, GitErrorCodes, Ref, RefType, Remote, RemoteSourcePublisher, Status } from "./api/git";
 import { item, showDialogMessage } from "./dialog";
-import { Git } from "./git";
+import { UnifiedDiff } from "./diff";
+import { Git, Stash } from "./git";
+import { HintItem, InputHint, showInputHints } from "./hints";
 import { LogOutputChannel } from "./logger";
 import { Model } from "./model";
 import { Repository, Resource, ResourceGroupType } from "./repository";
-import { fromNow, grep, isDescendant, pathEquals } from "./utils";
+import { toGitUri } from "./uri";
+import { fromNow, getModeForFile, grep, isDescendant, pathEquals } from "./utils";
 
-const fileBrowser = acode.require('fileBrowser') as any;
-const palette = acode.require('palette');
+const fileBrowser = acode.require('fileBrowser');
 const Url = acode.require('Url');
 const confirm = acode.require('confirm');
 const openFolder = acode.require('openFolder');
 const prompt = acode.require('prompt');
 const select = acode.require('select');
 const loader = acode.require('loader');
-const EditorFile: any = acode.require('EditorFile');
+const EditorFile = acode.require('EditorFile');
 const DialogBox = acode.require('DialogBox');
 const multiPrompt = acode.require('multiPrompt');
 
-interface PaletteItem {
-  text: string;
-  value: string;
-}
-
-abstract class CheckoutCommandItem implements PaletteItem {
-
-  get text(): string {
-    return `<div style="display: flex; align-items: center; width: 100%; height: 20px">
-      <span class="icon ${this.icon}" style="min-width: 20px; width: 30px; height: 20px; background-size: 14px;"></span>
-      <span class="text">${this.label}</span>
-    </div>`;
-  }
-
+abstract class CheckoutCommandItem implements HintItem {
   get value(): string {
     return this.label;
   }
@@ -60,56 +49,46 @@ class CheckoutDetachedItem extends CheckoutCommandItem {
   get icon(): string { return 'debug-disconnect'; }
 }
 
-class RefItemSeparator implements PaletteItem {
-  get text(): string {
+class RefItemSeparator implements HintItem {
+  get label(): string {
     switch (this.refType) {
       case RefType.Head:
-        return this._createSeparator('branches');
+        return 'branches';
       case RefType.RemoteHead:
-        return this._createSeparator('remote branched');
+        return 'remote branched';
       case RefType.Tag:
-        return this._createSeparator('tags');
+        return 'tags';
       default:
         return '';
     }
   }
 
-  get value(): string { return ''; }
-
-  private _createSeparator(name: string): string {
-    return `<small>${name}</small>`;
-  }
+  readonly type = 'separator';
 
   constructor(private readonly refType: RefType) { }
 }
 
-class RefItem implements PaletteItem {
+class RefItem implements HintItem {
 
-  get text(): string {
+  get label(): string {
     switch (this.ref.type) {
       case RefType.Head:
-        return this._createeItem('branch', this.ref.name ?? this.shortCommit);
+        return this.ref.name ?? this.shortCommit;
       case RefType.RemoteHead:
-        return this._createeItem('cloud', this.ref.name ?? this.shortCommit);
+        return this.ref.name ?? this.shortCommit;
       case RefType.Tag:
-        return this._createeItem('tag', this.ref.name ?? this.shortCommit);
+        return this.ref.name ?? this.shortCommit;
       default:
         return '';
     }
   }
 
-  private _createeItem(icon: string, label: string): string {
-    return `<div style="width: 100%;">
-      <div style="display: flex;">
-        <span class="icon ${icon}" style="width: 30px; height: 20px; background-size: 14px;"></span>
-        <span>${label} <span style="opacity: 0.6">${this.description}</span></span>
-      </div>
-      ${this.detail ? `<p style="width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 10px; opacity: 0.6">${this.detail}</p>` : ''}
-    </div>`
-  }
-
-  get value(): string {
-    return this.refId;
+  get icon(): string {
+    switch (this.ref.type) {
+      case RefType.Head: return 'branch';
+      case RefType.RemoteHead: return 'cloud';
+      case RefType.Tag: return 'tag';
+    }
   }
 
   get description(): string {
@@ -280,36 +259,32 @@ class RebaseUpstreamItem extends RebaseItem {
   }
 }
 
-class HEADItem implements PaletteItem {
+class HEADItem implements HintItem {
 
   constructor(private repository: Repository, private readonly shortCommitLength: number) { }
 
-  get text(): string { return `<span data-str="${this.description}">HEAD</span>`; }
+  get label(): string { return 'HEAD'; }
   get value(): string { return 'HEAD'; }
   get description(): string { return (this.repository.HEAD?.commit ?? '').substring(0, this.shortCommitLength); }
   get refName(): string { return 'HEAD'; }
 }
 
-class AddRemoteItem implements PaletteItem {
+class AddRemoteItem implements HintItem {
 
   constructor(private cc: CommandCenter) { }
 
-  get text(): string {
-    return `<div style="display: flex; align-items: center; width: 100%; height: 20px">
-      <span class="icon add" style="width: 30px; height: 20px; background-size: 14px;"></span>
-      <span class="text">Add a new remote...</span>
-    </div>`;
-  }
-  get value(): string { return 'Add a new remote...'; }
+  get label(): string { return 'Add a new remote...'; }
+  get icon(): string { return 'add'; };
 
   async run(repository: Repository): Promise<void> {
     await this.cc.addRemote(repository);
   }
 }
 
-class RemoteItem implements PaletteItem {
-  get text(): string { return `<span class="icon cloud" style="width: 30px; height: 20px; background-size: 14px;"></span><span data-str="${this.remote.fetchUrl}">${this.remote.name}</span>`; }
-  get value(): string { return `${this.remote.name}:${this.remote.fetchUrl}`; }
+class RemoteItem implements HintItem {
+  get label(): string { return this.remote.name; }
+  icon = 'cloud';
+  get smallDescription(): string | undefined { return this.remote.fetchUrl; };
   get remoteName(): string { return this.remote.name; }
 
   constructor(private readonly repository: Repository, private readonly remote: Remote) { }
@@ -319,15 +294,20 @@ class RemoteItem implements PaletteItem {
   }
 }
 
-class RepositoryItem implements PaletteItem {
+class RepositoryItem implements HintItem {
 
-  get text(): string {
-    return `<span data-str='${this.path}'>${getRepositoryLabel(this.path)}</span>`;
-  }
-
-  get value(): string { return this.path; }
+  get label(): string { return getRepositoryLabel(this.path); }
+  get smallDescription(): string { return this.path; }
 
   constructor(public readonly path: string) { }
+}
+
+class StashItem implements HintItem {
+
+  get label(): string { return `#${this.stash.index}: ${this.stash.description}`; }
+  get smallDescription(): string | undefined { return this.stash.branchName; }
+
+  constructor(readonly stash: Stash) { }
 }
 
 function getRepositoryLabel(repositoryRoot: string): string {
@@ -410,7 +390,7 @@ async function categorizeResourceByResolution(
   return { merge, resolved, unresolved, deletionConflicts };
 }
 
-async function createCheckoutItems(repository: Repository, detached = false): Promise<PaletteItem[]> {
+async function createCheckoutItems(repository: Repository, detached = false): Promise<HintItem[]> {
   const gitConfig = config.get('vcgit');
   const checkoutConfigType = gitConfig?.checkoutType;
   const showRefDetails = gitConfig?.showReferenceDetails === true;
@@ -438,7 +418,7 @@ async function createCheckoutItems(repository: Repository, detached = false): Pr
 class RefProcessor {
   protected readonly refs: Ref[] = [];
 
-  constructor(protected readonly type: RefType, protected readonly ctor: { new(ref: Ref, shortCommitLength: number): PaletteItem } = RefItem) { }
+  constructor(protected readonly type: RefType, protected readonly ctor: { new(ref: Ref, shortCommitLength: number): HintItem } = RefItem) { }
 
   processRef(ref: Ref): boolean {
     if (!ref.name && !ref.commit) {
@@ -452,7 +432,7 @@ class RefProcessor {
     return true;
   }
 
-  getItems(shortCommitLength: number): PaletteItem[] {
+  getItems(shortCommitLength: number): HintItem[] {
     const items = this.refs.map(r => new this.ctor(r, shortCommitLength));
     return items.length === 0 ? items : [new RefItemSeparator(this.type), ...items];
   }
@@ -473,7 +453,7 @@ class RefItemsProcessor {
     this.shortCommitLength = gitConfig?.commitShortHashLength ?? 7;
   }
 
-  processRefs(refs: Ref[]): PaletteItem[] {
+  processRefs(refs: Ref[]): HintItem[] {
     const refsToSkip = this.getRefsToSkip();
 
     for (const ref of refs) {
@@ -487,7 +467,7 @@ class RefItemsProcessor {
       }
     }
 
-    const result: PaletteItem[] = [];
+    const result: HintItem[] = [];
     for (const processor of this.processors) {
       result.push(...processor.getItems(this.shortCommitLength));
     }
@@ -516,7 +496,7 @@ class CheckoutRefProcessor extends RefProcessor {
     super(RefType.Head);
   }
 
-  override getItems(shortCommitLength: number): PaletteItem[] {
+  override getItems(shortCommitLength: number): HintItem[] {
     const items = this.refs.map(ref => new CheckoutItem(ref, shortCommitLength));
     return items.length === 0 ? items : [new RefItemSeparator(this.type), ...items];
   }
@@ -532,7 +512,7 @@ class CheckoutItemsProcessor extends RefItemsProcessor {
     super(repository, processors);
   }
 
-  override processRefs(refs: Ref[]): PaletteItem[] {
+  override processRefs(refs: Ref[]): HintItem[] {
     for (const ref of refs) {
       if (!this.detached && ref.name === 'origin/HEAD') {
         continue;
@@ -545,7 +525,7 @@ class CheckoutItemsProcessor extends RefItemsProcessor {
       }
     }
 
-    const result: PaletteItem[] = [];
+    const result: HintItem[] = [];
     for (const processor of this.processors) {
       for (const item of processor.getItems(this.shortCommitLength)) {
         if (!(item instanceof RefItem)) {
@@ -589,8 +569,9 @@ export class CommandCenter {
       editorManager.editor.commands.addCommand({
         name: commandName,
         description: `Git: ${title}`,
-        exec: (editor: any, arg: any) => command(...(Array.isArray(arg) ? arg : [arg]))
-      });
+        exec: (editor: any, arg: any) => command(...(Array.isArray(arg) ? arg : [arg])),
+        readOnly: true
+      } satisfies Ace.Command);
       return Disposable.toDisposable(() => {
         editorManager.editor.commands.removeCommand(commandName);
       });
@@ -603,7 +584,10 @@ export class CommandCenter {
     options: { recursive?: boolean; ref?: string } = {}
   ): Promise<void> {
     if (!url || typeof url !== 'string') {
-      url = await prompt('Clone Repository', '', 'text', { placeholder: 'Enter repository Url' }) ?? undefined;
+      url = await this.model.pickRemoteSource({
+        providerLabel: provider => `Clone from ${provider.name}`,
+        urlLabel: 'Clone from URL'
+      });
     }
 
     if (!url) {
@@ -620,7 +604,7 @@ export class CommandCenter {
     }
 
     const cloneLoader: any = loader.create('Loading', `Cloning git repository "${url}"`, {
-      callback: () => window.toast('Clone timeout', 3000),
+      oncancel: () => window.toast('Clone timeout', 3000),
       timeout: 120000
     });
     try {
@@ -679,12 +663,12 @@ export class CommandCenter {
 
     const items = this.model.closedRepositories.map(r => new RepositoryItem(r));
 
-    palette(() => items as any[], (path: string) => {
-      const repository = items.find(item => pathEquals(item.path, path));
-      if (repository) {
-        this.model.openRepository(repository.path, true);
-      }
-    }, 'Pick a repository to reopen');
+    const repository = await showInputHints(items, { placeholder: 'Pick a repository to reopen' });
+    if (!repository) {
+      return;
+    }
+
+    this.model.openRepository(repository.path, true);
   }
 
   @command('Close Repository', { repository: true })
@@ -716,11 +700,7 @@ export class CommandCenter {
     let uri: string | undefined;
 
     if (typeof arg === 'string') {
-      if (!isUri(arg)) {
-        uri = `file://${arg}`;
-      } else {
-        uri = arg;
-      }
+      uri = toFileUrl(arg);
     } else {
       let resource = arg;
 
@@ -729,7 +709,7 @@ export class CommandCenter {
       }
 
       if (resource && resource.type !== Status.DELETED && resource.type !== Status.INDEX_DELETED) {
-        uri = `file://${resource.resourceUri}`;
+        uri = toFileUrl(resource.resourceUri);
       }
     }
 
@@ -737,7 +717,7 @@ export class CommandCenter {
       return;
     }
 
-    const file: Acode.EditorFile = new EditorFile(Url.basename(uri), { uri });
+    const file = new EditorFile(Url.basename(uri)!, { uri });
     file.makeActive();
 
     if (localStorage.sidebarShown === '1') {
@@ -760,6 +740,101 @@ export class CommandCenter {
     if (!resource) {
       return;
     }
+
+    const basename = Url.basename(resource.resourceUri);
+    const title = `${basename} (HEAD)`;
+    let HEAD: string | undefined = undefined;
+
+    switch (resource.type) {
+      case Status.INDEX_MODIFIED:
+      case Status.INDEX_RENAMED:
+      case Status.INTENT_TO_RENAME:
+      case Status.TYPE_CHANGED:
+        HEAD = toGitUri(resource.original, 'HEAD');
+        break;
+
+      case Status.MODIFIED:
+        HEAD = toGitUri(resource.resourceUri, '~');
+        break;
+
+      case Status.DELETED_BY_US:
+      case Status.DELETED_BY_THEM:
+        HEAD = toGitUri(resource.resourceUri, '~1');
+        break;
+
+      default:
+        break;
+    }
+
+    if (!HEAD) {
+      acode.pushNotification('', `HEAD version of "${basename}" is not available.`, { type: 'warning' });
+      return;
+    }
+
+    const file = new EditorFile(title, { uri: HEAD, editable: false });
+    file.setMode(getModeForFile(basename!));
+
+    if (localStorage.sidebarShown === '1') {
+      acode.exec('toggle-sidebar');
+    }
+  }
+
+  @command('Open Changes')
+  async openChange(arg?: Resource | string, ...resourceStates: SourceControlResourceState[]): Promise<void> {
+    let resources: Resource[] | undefined = undefined;
+
+    if (typeof arg === 'string') {
+      const resource = this.getSCMResource(arg);
+      if (resource !== undefined) {
+        resources = [resource];
+      }
+    } else {
+      let resource: Resource | undefined = undefined;
+
+      if (arg instanceof Resource) {
+        resource = arg;
+      } else {
+        resource = this.getSCMResource();
+      }
+
+      if (resource) {
+        resources = [...resourceStates as Resource[], resource];
+      }
+    }
+
+    if (!resources) {
+      return;
+    }
+
+    for (const resource of resources) {
+      await resource.openChange();
+    }
+
+    if (localStorage.sidebarShown === '1') {
+      acode.exec('toggle-sidebar');
+    }
+  }
+
+  @command('Diff')
+  async diff(leftUri?: string, rightUri?: string, title?: string): Promise<void> {
+    if (!leftUri || !rightUri) {
+      return;
+    }
+
+    title = title || `${Url.basename(leftUri) || Url.basename(rightUri)} (Diff)`;
+    const diff = new UnifiedDiff({ oldUri: leftUri, newUri: rightUri, title });
+
+    loader.showTitleLoader();
+    await diff.show();
+    loader.removeTitleLoader();
+  }
+
+  @command('Open Diff')
+  async openDiff(leftUri?: string, rightUri?: string, title?: string): Promise<void> {
+    if (localStorage.sidebarShown === '1') {
+      acode.exec('toggle-sidebar');
+    }
+    await this.diff(leftUri, rightUri, title);
   }
 
   @command('Clone')
@@ -784,16 +859,15 @@ export class CommandCenter {
         repositoryUrl = addedFolder[0].url;
         askToOpen = false;
       } else {
-        const items: { text: string, value: string, url?: string }[] = [
-          ...addedFolder.map(folder => ({ text: `<span data-str='${uriToPath(folder.url)}'>${folder.title}</span>`, value: uriToPath(folder.url), url: folder.url })),
-          { text: 'Choose Folder...', value: 'choose:folder' }
+        const items: { label: string, url?: string }[] = [
+          ...addedFolder.map(folder => ({ label: folder.title, smallDescription: uriToPath(folder.url), url: folder.url })),
+          { label: 'Choose Folder...' }
         ];
-        const value = await new Promise<string>((c) => palette(() => items as any[], c, 'Pick workspace folder to initialize git repo in'));
-        const item = items.find(i => i.value === value);
+        const item = await showInputHints(items, { placeholder: 'Pick workspace folder to initialize git repo in' });
         if (!item) {
           return;
         } else if (item.url) {
-          repositoryPath = item.value;
+          repositoryPath = uriToPath(item.url);
           repositoryUrl = item.url;
           askToOpen = false;
         }
@@ -1488,31 +1562,38 @@ export class CommandCenter {
     const createBranch = new CreateBranchItem();
     const createBranchFrom = new CreateBranchFromItem();
     const checkoutDetached = new CheckoutDetachedItem();
-    let items: PaletteItem[] = [];
+    const hints: HintItem[] = [];
+    const commands: HintItem[] = [];
 
     if (!opts?.detached) {
-      items.push(createBranch, createBranchFrom, checkoutDetached);
+      commands.push(createBranch, createBranchFrom, checkoutDetached);
     }
 
-    const choice = await new Promise<PaletteItem | undefined>(c => {
-      palette(
-        //@ts-ignore
-        async () => {
-          items.push(...await createCheckoutItems(repository, opts?.detached));
-          return items;
-        },
-        (value) => {
-          if (typeof value !== 'string') {
-            return c(undefined);
-          }
+    const disposables: IDisposable[] = [];
+    const inputHint = new InputHint();
+    inputHint.loading = true;
+    inputHint.placeholder = opts?.detached
+      ? 'Select a branch to checkout in detached mode'
+      : 'Select a branch or tag to checkout';
 
-          return c(items.find(i => i.value === value));
-        },
-        opts?.detached
-          ? 'Select a branch to checkout in detached mode'
-          : 'Select a branch or tag to checkout'
-      );
+    hints.push(...await createCheckoutItems(repository, opts?.detached));
+
+    if (commands.length === 0) {
+      inputHint.items = hints;
+    } else if (hints.length === 0) {
+      inputHint.items = commands;
+    } else {
+      inputHint.items = [...commands, ...hints];
+    }
+
+    inputHint.loading = false;
+
+    const choice = await new Promise<HintItem | undefined>(c => {
+      disposables.push(inputHint.onDidHide(() => c(undefined)));
+      disposables.push(inputHint.onDidSelect((item) => c(item)));
     });
+    Disposable.dispose(disposables);
+    inputHint.dispose();
 
     if (!choice) {
       return false;
@@ -1525,31 +1606,31 @@ export class CommandCenter {
     } else if (choice === checkoutDetached) {
       return this._checkout(repository, { detached: true });
     } else {
-      const item = choice as CheckoutItem;
+      const checkoutItem = choice as CheckoutItem;
 
       try {
-        await item.run(repository, opts);
+        await checkoutItem.run(repository, opts);
       } catch (err: any) {
         if (err.gitErrorCode !== GitErrorCodes.DirtyWorkTree) {
           throw err;
         }
 
-        const stash = 'Stash & Checkout';
-        const migrate = 'Migrate Changes';
-        const force = 'Force Checkout';
-
-        const choice = await new Promise<string>((c) => {
-          acode.alert('WARNING', 'Your local changes would be overwritten by checkout.', async () => {
-            c(await select('', [stash, migrate, force]));
-          });
-        });
+        const stash = item('Stash & Checkout');
+        const migrate = item('Migrate Changes');
+        const force = item('Force Checkout');
+        const choice = await showDialogMessage('WARNING', 'Your local changes would be overwritten by checkout.', stash, migrate, force);
 
         if (choice === force) {
           await this.cleanAll(repository);
-          await item.run(repository, opts);
+          await checkoutItem.run(repository, opts);
         } else if (choice === stash || choice === migrate) {
-          //TODO: handle stash
-          acode.alert('INFO', 'not implemented');
+          if (await this._stash(repository, true)) {
+            await checkoutItem.run(repository, opts);
+
+            if (choice === migrate) {
+              await this.stashPopLatest(repository);
+            }
+          }
         }
       }
     }
@@ -1626,18 +1707,7 @@ export class CommandCenter {
         return [new HEADItem(repository, commitShortHashLength), ...refProcessors.processRefs(refs)];
       }
 
-      const choice = await new Promise<PaletteItem | undefined>((c) => {
-        let items: PaletteItem[] = [];
-        palette(
-          //@ts-ignore
-          async () => {
-            items = await getRefHints();
-            return items;
-          },
-          (value) => c(items.find(i => i.value === value)),
-          'Select a ref to create the branch from'
-        );
-      });
+      const choice = await showInputHints(getRefHints(), { placeholder: 'Select a ref to create the branch from' });
 
       if (!choice) {
         return;
@@ -1698,18 +1768,7 @@ export class CommandCenter {
       const placeholder = !options.remote
         ? 'Select a branch to delete'
         : 'Select a remote branch to delete';
-      const choice = await new Promise<PaletteItem | undefined>((c) => {
-        let items: PaletteItem[] = [];
-        palette(
-          //@ts-ignore
-          async () => {
-            items = await getBranchHints();
-            return items;
-          },
-          (value) => c(items.find(i => i.value === value)),
-          placeholder
-        );
-      });
+      const choice = await showInputHints(getBranchHints(), { placeholder });
 
       if (!(choice instanceof BranchDeleteItem) || !choice.refName) {
         return;
@@ -1764,7 +1823,7 @@ export class CommandCenter {
     const gitConfig = config.get('vcgit')!;
     const showRefDetails = gitConfig.showReferenceDetails;
 
-    const getHints = async (): Promise<PaletteItem[]> => {
+    const getHintItems = async (): Promise<HintItem[]> => {
       const refs = await repository.getRefs({ includeCommitDetails: showRefDetails });
       const itemsProcessor = new RefItemsProcessor(repository, [
         new RefProcessor(RefType.Head, MergeItem),
@@ -1778,18 +1837,7 @@ export class CommandCenter {
       return itemsProcessor.processRefs(refs);
     }
 
-    const choice = await new Promise<PaletteItem | undefined>((c) => {
-      let items: PaletteItem[] = [];
-      palette(
-        //@ts-ignore
-        async () => {
-          items = await getHints();
-          return items;
-        },
-        (value) => c(items.find(i => i.value === value)),
-        'Select a branch or tag to merge from'
-      );
-    });
+    const choice = await showInputHints(getHintItems(), { placeholder: 'Select a branch or tag to merge from' });
 
     if (choice instanceof MergeItem) {
       await choice.run(repository);
@@ -1807,7 +1855,7 @@ export class CommandCenter {
     const showRefDetails = gitConfig.showReferenceDetails;
     const commitShortHashLength = gitConfig.commitShortHashLength;
 
-    const getHints = async (): Promise<PaletteItem[]> => {
+    const getHintItems = async (): Promise<HintItem[]> => {
       const refs = await repository.getRefs({ includeCommitDetails: showRefDetails });
       const itemsProcessor = new RefItemsProcessor(repository, [
         new RefProcessor(RefType.Head, RebaseItem),
@@ -1831,18 +1879,7 @@ export class CommandCenter {
       return hintItems;
     }
 
-    const choice = await new Promise<PaletteItem | undefined>((c) => {
-      let items: PaletteItem[] = [];
-      palette(
-        //@ts-ignore
-        async () => {
-          items = await getHints();
-          return items;
-        },
-        (value) => c(items.find(i => i.value === value)),
-        'Select a branch to rebase onto'
-      );
-    });
+    const choice = await showInputHints(getHintItems(), { placeholder: 'Select a branch to rebase onto' });
 
     if (choice instanceof RebaseItem) {
       await choice.run(repository);
@@ -1877,25 +1914,14 @@ export class CommandCenter {
     const showRefDetails = gitConfig.showReferenceDetails;
     const commitShortHashLength = gitConfig.commitShortHashLength;
 
-    const tagHints = async (): Promise<TagDeleteItem[] | PaletteItem[]> => {
+    const tagHints = async (): Promise<TagDeleteItem[] | HintItem[]> => {
       const remoteTags = await repository.getRefs({ pattern: 'refs/tags', includeCommitDetails: showRefDetails });
       return remoteTags.length === 0
-        ? [{ text: 'ⓘ This repository has no tags', value: '' }]
+        ? [{ label: 'ⓘ This repository has no tags' }]
         : remoteTags.map(ref => new TagDeleteItem(ref, commitShortHashLength));
     }
 
-    const choice = await new Promise<PaletteItem | undefined>((c) => {
-      let items: PaletteItem[] = [];
-      palette(
-        //@ts-ignore
-        async () => {
-          items = await tagHints();
-          return items;
-        },
-        (value) => c(items.find(i => i.value === value)),
-        'Select a tag to delete'
-      );
-    });
+    const choice = await showInputHints(tagHints(), { placeholder: 'Select a tag to delete' });
 
     if (choice instanceof TagDeleteItem) {
       await choice.run(repository);
@@ -1918,12 +1944,7 @@ export class CommandCenter {
 
     let remoteName = remoteHints[0].remoteName;
     if (remoteHints.length > 1) {
-      const remoteHint = await new Promise<RemoteItem | undefined>((c) => {
-        palette(() => remoteHints as any,
-          (value) => c(remoteHints.find(i => i.value === value)),
-          'Select a remote to delete a tag from'
-        );
-      });
+      const remoteHint = await showInputHints(remoteHints, { placeholder: 'Select a remote to delete a tag from' });
 
       if (!remoteHint) {
         return;
@@ -1932,7 +1953,7 @@ export class CommandCenter {
       remoteName = remoteHint.remoteName;
     }
 
-    const remoteTagHints = async (): Promise<RemoteTagDeleteItem[] | PaletteItem[]> => {
+    const remoteTagHints = async (): Promise<RemoteTagDeleteItem[] | HintItem[]> => {
       const remoteTagsRaw = await repository.getRemoteRefs(remoteName, { tags: true });
 
       // Deduplicate annotated and lightweight tags
@@ -1948,22 +1969,11 @@ export class CommandCenter {
       }
 
       return remoteTags.length === 0
-        ? [{ text: `ⓘ Remote "${remoteName}" has no tags.`, value: '' }]
+        ? [{ label: `ⓘ Remote "${remoteName}" has no tags.` }]
         : remoteTags.map(ref => new RemoteTagDeleteItem(ref, commitShortHashLength));
     }
 
-    const remoteTagHint = await new Promise<PaletteItem | undefined>((c) => {
-      let items: PaletteItem[] = [];
-      palette(
-        //@ts-ignore
-        async () => {
-          items = await remoteTagHints();
-          return items;
-        },
-        (value) => c(items.find(i => i.value === value)),
-        'Select a remote tag to delete'
-      );
-    });
+    const remoteTagHint = await showInputHints(remoteTagHints(), { placeholder: 'Select a remote tag to delete' });
 
     if (remoteTagHint instanceof RemoteTagDeleteItem) {
       await remoteTagHint.run(repository, remoteName);
@@ -1994,11 +2004,7 @@ export class CommandCenter {
       }
     }
 
-    const remoteItem = await new Promise<RemoteItem | undefined>(c => {
-      palette(() => remoteItems as any, async (value: string) => {
-        c(remoteItems.find(r => r.value === value));
-      }, 'Select a remote to fetch');
-    });
+    const remoteItem = await showInputHints(remoteItems, { placeholder: 'Select a remote to fetch' });
 
     if (!remoteItem) {
       return;
@@ -2126,13 +2132,13 @@ export class CommandCenter {
       const branchName = repository.HEAD.name;
       if (!pushOptions.pushTo?.remote) {
         const addRemote = new AddRemoteItem(this);
-        const hints = [...remotes.filter(r => r.pushUrl !== undefined).map(r => ({ text: `<span data-str="${r.pushUrl}">${r.name}</span>`, value: r.name })), addRemote];
+        const hints = [...remotes.filter(r => r.pushUrl !== undefined).map(r => ({ label: r.name, smallDescription: r.pushUrl })), addRemote];
         const placeholder = `Pick a remote to publish the branch "${branchName}" to:`;
-        const choice = await new Promise<PaletteItem | undefined>(c => {
-          palette(() => hints as any, async (value: string) => {
-            c(hints.find(r => r.value === value));
-          }, placeholder);
-        });
+        const choice = await showInputHints(hints, { placeholder });
+
+        if (!choice) {
+          return;
+        }
 
         if (choice === addRemote) {
           const newRemote = await this.addRemote(repository);
@@ -2141,7 +2147,7 @@ export class CommandCenter {
             await repository.pushTo(newRemote, branchName, undefined, forcePushMode);
           }
         } else {
-          await repository.pushTo(choice?.value, branchName, undefined, forcePushMode);
+          await repository.pushTo(choice.label, branchName, undefined, forcePushMode);
         }
       } else {
         await repository.pushTo(pushOptions.pushTo.remote, pushOptions.pushTo.refspec || branchName, pushOptions.pushTo.setUpstream, forcePushMode);
@@ -2186,30 +2192,27 @@ export class CommandCenter {
 
   @command('Add Remote...', { repository: true })
   async addRemote(repository: Repository): Promise<string | undefined> {
-    const data: any = await multiPrompt('Add Remote', [
-      {
-        id: 'url',
-        type: 'url',
-        placeholder: 'Please provide a repository URL',
-        required: true
-      },
-      {
-        id: 'name',
-        type: 'text',
-        placeholder: 'Please provide a remote name',
-        required: true
-      }
-    ], '');
-
-    if (typeof data !== 'object') {
-      return;
-    }
-
-    const { url, name: resultName } = data;
+    const url = await this.model.pickRemoteSource({
+      providerLabel: provider => `Add remote from ${provider.name}`,
+      urlLabel: 'Add remote from URL'
+    });
 
     if (!url) {
       return;
     }
+
+    const resultName = await prompt('Remote Name', '', 'text', {
+      placeholder: 'Please provide a remote name',
+      test: (name: string) => {
+        if (!sanitizeRemoteName(name)) {
+          return false;
+        } else if (repository.remotes.find(r => r.name === name)) {
+          return false;
+        }
+
+        return true;
+      }
+    });
 
     const name = sanitizeRemoteName(resultName || '');
 
@@ -2233,11 +2236,7 @@ export class CommandCenter {
 
     const hints: RemoteItem[] = repository.remotes.map(remote => new RemoteItem(repository, remote));
 
-    const remote = await new Promise<RemoteItem | undefined>(c => {
-      palette(() => hints as any, async (value: string) => {
-        c(hints.find(r => r.value === value));
-      }, 'Select a remote to remove');
-    });
+    const remote = await showInputHints(hints, { placeholder: 'Select a remote to remove' });
 
     if (!remote) {
       return;
@@ -2302,25 +2301,15 @@ export class CommandCenter {
         publisher = publishers[0];
       } else {
         const hints = publishers
-          .map((provider, index) => ({
-            text: `<div style="display: flex; align-items: center; width: 100%; height: 20px">
-              ${provider.icon ? `<span class="icon ${provider.icon}" style="width: 30px; height: 20px; background-size: 14px;"></span>` : ''}
-              <span class="text">Publish To ${provider.name}</span>
-            </div>`,
-            value: index.toString()
-          }));
+          .map((provider) => ({ label: provider.name, icon: provider.icon, provider }));
 
-        const choice = await new Promise<RemoteSourcePublisher | undefined>((c) => {
-          palette(() => hints as any, (value) => {
-            c(publishers.find((pub, index) => index.toString() === value.toString()));
-          }, `Pick a provider to publish the branch "${branchName}" to:`);
-        });
+        const choice = await showInputHints(hints, { placeholder: `Pick a provider to publish the branch "${branchName}" to:` });
 
         if (!choice) {
           return;
         }
 
-        publisher = choice;
+        publisher = choice.provider;
       }
 
       await publisher.publishRepository(new ApiRepository(repository));
@@ -2336,12 +2325,8 @@ export class CommandCenter {
     }
 
     const addRemote = new AddRemoteItem(this);
-    const hints = [...repository.remotes.map(r => ({ text: `<span data-str="${r.pushUrl}">${r.name}</span>`, value: r.pushUrl })), addRemote];
-    const choice = await new Promise<any>((c) => {
-      palette(() => hints as any, (value) => {
-        c(hints.find((hint) => hint.value === value));
-      }, `Pick a provider to publish the branch "${branchName}" to:`);
-    });
+    const hints = [...repository.remotes.map(r => ({ label: r.name, smallDescription: r.pushUrl, value: r.pushUrl })), addRemote];
+    const choice = await showInputHints(hints, { placeholder: `Pick a provider to publish the branch "${branchName}" to:` });
 
     if (!choice) {
       return;
@@ -2360,6 +2345,195 @@ export class CommandCenter {
 
       this.model.firePublishEvent(repository, branchName);
     }
+  }
+
+  private async _stash(repository: Repository, includeUntracked = false, staged = false): Promise<boolean> {
+    const noUnstagedChanges = repository.workingTreeGroup.resourceStates.length === 0
+      && (!includeUntracked || repository.untrackedGroup.resourceStates.length === 0);
+    const noStagedChanges = repository.indexGroup.resourceStates.length === 0;
+
+    if (staged) {
+      if (noStagedChanges) {
+        acode.pushNotification('', 'There are no staged changes to stash.');
+        return false;
+      }
+    } else {
+      if (noUnstagedChanges && noStagedChanges) {
+        acode.pushNotification('', 'There are no changes to stash.');
+        return false;
+      }
+    }
+
+    const gitConfig = config.get('vcgit')!;
+    const promptToSaveFilesBeforeStashing = gitConfig.promptToSaveFilesBeforeStash;
+
+    if (promptToSaveFilesBeforeStashing !== 'never') {
+      let files = editorManager.files
+        .filter(file => file.name !== 'untitled.txt' && isDescendant(repository.root, uriToPath(file.uri)));
+
+      if (promptToSaveFilesBeforeStashing === 'staged' || repository.indexGroup.resourceStates.length > 0) {
+        files = files
+          .filter(file => repository.indexGroup.resourceStates.some(s => pathEquals(s.resourceUri, uriToPath(file.uri))));
+      }
+
+      if (files.length > 0) {
+        const message = files.length === 1
+          ? `The following file has unsaved changes which won\'t be included in the stash if you proceed: ${Url.basename(files[0].uri)}.</br></br>Would you like to save it before stashing?`
+          : `There are ${files.length} unsaved files.</br></br>Would you like to save them before stashing?`;
+        const saveAndStash = item('Save All & Stash');
+        const stash = item('Stash Anyway');
+        const result = await showDialogMessage('WARNING', message, saveAndStash, stash);
+
+        if (result === saveAndStash) {
+          await Promise.all(files.map(file => file.save()));
+        } else if (result !== stash) {
+          return false;
+        }
+      }
+    }
+
+    let message: string | null = null;
+
+    if (gitConfig.useCommitInputAsStashMessage) {
+      message = repository.inputBox.value;
+    }
+
+    message = await prompt('Stash Message', '', 'text', { placeholder: 'Optionally provide a stash message' });
+
+    if (message === null) {
+      return false;
+    }
+
+    try {
+      await repository.createStash(message, includeUntracked, staged);
+      return true;
+    } catch (err: any) {
+      if (/You do not have the initial commit yet/.test(err.stderr || '')) {
+        acode.pushNotification('INFO', 'The repository does not have any commits. Please make an initial commit before creating a stash.', { type: 'info' });
+        return false;
+      }
+
+      throw err;
+    }
+  }
+
+  @command('Stash', { repository: true })
+  async stash(repository: Repository): Promise<boolean> {
+    return await this._stash(repository);
+  }
+
+  @command('Stash Staged', { repository: true })
+  async stashStaged(repository: Repository): Promise<boolean> {
+    return await this._stash(repository, false, true);
+  }
+
+  @command('Stash (Include Untracked)', { repository: true })
+  async stashIncludeUntracked(repository: Repository): Promise<boolean> {
+    return await this._stash(repository, true);
+  }
+
+  @command('Pop Stash...', { repository: true })
+  async stashPop(repository: Repository): Promise<void> {
+    const placeHolder = 'Pick a stash to pop';
+    const stash = await this.pickStash(repository, placeHolder);
+
+    if (!stash) {
+      return;
+    }
+
+    await repository.popStash(stash.index);
+  }
+
+  @command('Pop Latest Stash', { repository: true })
+  async stashPopLatest(repository: Repository): Promise<void> {
+    const stashes = await repository.getStashes();
+
+    if (stashes.length === 0) {
+      acode.pushNotification('', 'There are no stashes in the repository.');
+      return;
+    }
+
+    await repository.popStash();
+  }
+
+  @command('Apply Stash...', { repository: true })
+  async stashApply(repository: Repository): Promise<void> {
+    const placeHolder = 'Pick a stash to apply';
+    const stash = await this.pickStash(repository, placeHolder);
+
+    if (!stash) {
+      return;
+    }
+
+    await repository.applyStash(stash.index);
+  }
+
+  @command('Apply Latest Stash', { repository: true })
+  async stashApplyLatest(repository: Repository): Promise<void> {
+    const stashes = await repository.getStashes();
+
+    if (stashes.length === 0) {
+      acode.pushNotification('', 'There are no stashes in the repository.');
+      return;
+    }
+
+    await repository.applyStash();
+  }
+
+  @command('Drop Stash...', { repository: true })
+  async stashDrop(repository: Repository): Promise<void> {
+    const placeHolder = 'Pick a stash to drop';
+    const stash = await this.pickStash(repository, placeHolder);
+
+    if (!stash) {
+      return;
+    }
+
+    await this._stashDrop(repository, stash);
+  }
+
+  @command('Drop All Stashes...', { repository: true })
+  async stashDropAll(repository: Repository): Promise<void> {
+    const stashes = await repository.getStashes();
+
+    if (stashes.length === 0) {
+      acode.pushNotification('', 'There are no stashes in the repository.');
+      return;
+    }
+
+    const question = stashes.length === 1 ?
+      `Are you sure you want to drop ALL stashes? There is 1 stash that will be subject to pruning, and MAY BE IMPOSSIBLE TO RECOVER.` :
+      `Are you sure you want to drop ALL stashes? There are ${stashes.length} stashes that will be subject to pruning, and MAY BE IMPOSSIBLE TO RECOVER.`;
+
+    const result = await confirm('WARNING', question);
+    if (result !== true) {
+      return;
+    }
+
+    await repository.dropStash();
+  }
+
+  async _stashDrop(repository: Repository, stash: Stash): Promise<boolean> {
+    const result = await confirm('WARNING', `Are you sure you want to drop the stash: ${stash.description}?`);
+
+    if (result !== true) {
+      return false;
+    }
+
+    await repository.dropStash(stash.index);
+    return true;
+  }
+
+  private async pickStash(repository: Repository, placeholder: string): Promise<Stash | undefined> {
+    const getStashHintItems = async (): Promise<StashItem[] | HintItem[]> => {
+      const stashes = await repository.getStashes();
+      return stashes.length > 0
+        ? stashes.map(stash => new StashItem(stash))
+        : [{ label: 'ⓘ This repository has no stashes.' }];
+    }
+
+    const result = await showInputHints<StashItem | HintItem>(getStashHintItems(), { placeholder });
+    return result instanceof StashItem ? result.stash : undefined;
   }
 
   private getSCMResource(path?: string): Resource | undefined {
