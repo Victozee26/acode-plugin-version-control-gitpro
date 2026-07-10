@@ -40,7 +40,7 @@ After installation, generate and configure your SSH keys normally.
 
 ## Features
 
-See [Git support in Acode](/docs/overview.md) to learn about the features of this plugin.
+See [Git support in Acode](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/blob/main/docs/overview.md) to learn about the features of this plugin.
 
 ## Installation
 
