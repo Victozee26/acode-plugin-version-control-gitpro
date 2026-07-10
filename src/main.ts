@@ -92,7 +92,7 @@ const defaultGitConfig: IGitConfig = {
 	optimisticUpdate: true,
 	detectWorktrees: false,
 	detectWorktreesLimit: 20,
-	showCommitHistoryResourceGroup: true
+	showCommitHistoryResourceGroup: false
 }
 
 async function destroy() {
