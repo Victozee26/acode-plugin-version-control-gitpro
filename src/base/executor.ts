@@ -127,44 +127,23 @@ function buildCommand(
   return finalCommand;
 }
 
-function getExecutorType(): 'BackgroundExecutor' | 'Executor' {
-  if (typeof Executor.BackgroundExecutor !== 'undefined') {
-    return 'BackgroundExecutor';
+export function getExecutor(): Executor {
+  if (typeof Executor.BackgroundExecutor === 'object') {
+    return Executor.BackgroundExecutor as Executor;
   }
 
-  return 'Executor';
+  return Executor;
 }
 
-/**
- * Use nativeStart to fix invalid output in git due to trimmed output in Acode, causing parser to fail
- * @see https://github.com/Acode-Foundation/Acode/tree/main/src/plugins/terminal/Executor.js#L37
- */
-async function nativeStart(command: string, onData: (type: string, data: string) => void, alpine?: boolean): Promise<string> {
-  const executorType = getExecutorType();
+function filterOutput(type: ExecutorOutputType, data: string): boolean {
+  if (type !== 'stderr') {
+    return false;
+  }
 
-  return new Promise<string>((resolve, reject) => {
-    let first = true;
-    cordova.exec(async (message: string) => {
-      if (first) {
-        first = false;
-        await new Promise(resolve => setTimeout(resolve, 100));
-        resolve(message);
-      } else {
-        const match = message.match(/^([^:]+):(.*)$/);
-        if (match) {
-          const prefix = match[1];
-          const message = match[2]; // Don't trim
-          onData(prefix, message);
-        } else {
-          onData('unknown', message);
-        }
-      }
-    },
-      reject,
-      executorType,
-      'start',
-      [command, String(alpine)]);
-  });
+  return (
+    /proot warning: can't sanitize binding/.test(data) ||
+    /find: .: Permission denied/.test(data)
+  );
 }
 
 class AcodeProcess implements Process {
@@ -228,11 +207,11 @@ class AcodeProcess implements Process {
 
       const command = buildCommand(this.command, this.args, this.options);
 
-      this._pid = await nativeStart(
+      this._pid = await getExecutor().start(
         command,
-        (type: string, data: string) => {
+        (type: ExecutorOutputType, data: string) => {
           // Filter out proot warnings
-          if (type === 'stderr' && data.includes("proot warning: can't sanitize binding")) {
+          if (filterOutput(type, data)) {
             return;
           }
 
@@ -370,4 +349,17 @@ export function spawn(
     console.error('Failed to start process', err);
   });
   return process;
+}
+
+export function exec(
+  command: string,
+  args: string[] = [],
+  options: SpawnOptions = {}
+): Promise<ExecResult> {
+  const cmd = buildCommand(command, args, options);
+  return new Promise<ExecResult>((c) => {
+    Executor.execute(cmd, options.alpine ?? true)
+      .then((stdout) => c({ exitCode: 0, stdout, stderr: '' }))
+      .catch((err) => c({ exitCode: 1, stdout: '', stderr: err?.message || String(err) }))
+  });
 }

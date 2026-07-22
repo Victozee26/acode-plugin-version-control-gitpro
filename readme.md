@@ -1,11 +1,10 @@
-# Acode Plugin Git SCM
-
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.2.3-blue.svg)
+# Acode Plugin Git SCM
+
+![Version](https://img.shields.io/badge/version-2.9.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Acode](https://img.shields.io/badge/Acode-Compatible-orange.svg)
-
 
 **Professional Git integration for Acode Editor**
 
@@ -13,25 +12,25 @@
 
 </div>
 
-**Git SCM v2.0.0** is a complete rewrite that communicates directly with the native Git binary installed on your system, providing full Git compatibility. This plugin executes real Git commands through Acode's Executor API, ensuring 100% Git compatibility. Unlike JavaScript-based solutions (isomorphic-git), this plugin communicates directly with your system Git installation for full compatibility and optimal performance.
+**Git SCM v2** is a complete rewrite that communicates directly with the native Git binary installed on your system, providing full Git compatibility. This plugin executes real Git commands through Acode's Executor API, ensuring 100% Git compatibility. Unlike JavaScript-based solutions (isomorphic-git), this plugin communicates directly with your system Git installation for full compatibility and optimal performance.
 
-> ⚠️ **IMPORTANT WARNING**: Before updating, please uninstall the previous version first to avoid complications and errors due to changes in settings and configuration. I will improve this in the future. For now, remove the old version and reinstall.
+## Screenshoots
 
-# Screenshoots
 <div align="center" style="display: flex; overflow-x: auto; gap: 10px; padding: 10px;">
-  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/1.jpg" alt="Sidebar Interface" width="300"/>
-  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/2.jpg" width="300"/>
-  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/3.jpg" width="300"/>
-  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/4.jpg" alt="Branch Management" width="300"/>
+  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/1.jpg" alt="Source Control" width="300"/>
+  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/2.jpg" alt="File Tree Decorations" width="300"/>
+  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/3.jpg" alt="Branch Management" width="300"/>
+  <img src="https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/refs/heads/main/screenshot/4.jpg" alt="Git Command" width="300"/>
 </div>
 
 ## Requirements
 
 **Git** must be installed on your system and Acode latest version with Terminal and Executor API support:
-   ```bash
-   apk add git
-   ```
-   
+
+```bash
+apk add git
+```
+
 ### SSH (Required for GitHub / SSH remotes)
 
 > Alpine Linux ships with **Dropbear SSH** by default, which conflicts with OpenSSH and causes Git authentication issues.
@@ -39,35 +38,9 @@
 
 After installation, generate and configure your SSH keys normally.
 
-### Optional (Recommended)
-
-**inotify_tools** - For real time, auto refresh:
-```bash
-apk add inotify-tools
-```
-
-After installation, enable in plugin settings **"Git: Use inotifywait"**.
-
-> **info**: Without inotify_tools, the plugin still works but you need to manually refresh to see changes.
-
----
-
 ## Features
 
-### Core Git Operations
-- **Repository Management**: Init, Clone, Multi-repository support
-- **Staging & Commits**: Stage/unstage files, commit, amend commits, undo commits
-- **Branches**: Create, delete, rename, merge, rebase branches
-- **Remote Operations**: Pull, push, fetch (with prune), sync (Pull & Push)
-- **History**: View commit history
-- **Tags & Remotes**: Tag and remote management
-
-### Acode Integration
-- **File Decorations**: Visual decoration in SCM panel and file explorer
-- **Editor Integration**: Commit message editor opens in Acode (via IPC)
-- **Credential Management**: Integrated askpass for authentication
-- **Multi-repository**: Work with multiple Git repositories 
-- **Status Bar**: Quick sync actions and repository status
+See [Git support in Acode](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/blob/main/docs/overview.md) to learn about the features of this plugin.
 
 ## Installation
 
@@ -77,115 +50,78 @@ After installation, enable in plugin settings **"Git: Use inotifywait"**.
 4. Tap **Install**
 5. Restart
 
-### Architecture
+### How It Works
 
 The plugin follows a **Shell → Parse → Render** workflow. The same architecture as the VS Code Git extension:
 
-1. **Shell**: Execute Git commands via Acode Executor API
-2. **Parse**: Process stdout/stderr into internal models
-3. **Render**: Display models in UI (resource state, decorations, views)
+| Stage      | Responsibility                                            |
+| ---------- | --------------------------------------------------------- |
+| **Shell**  | Execute Git commands via Acode Executor API               |
+| **Parse**  | Process stdout/stderr into internal models                |
+| **Render** | Display models in UI (resource state, decorations, views) |
 
-This approach mirrors [VSCode Git extension](https://github.com/microsoft/vscode/blob/main/extensions/git).
+---
 
-## API Documentation
+## API
 
-### Git API
+The Git extension exposes an API, reachable by any other plugin.
+
+#### Git API
 
 Access the Git API in Acode:
 
+1. Copy `src/api/git.d.ts` to your plugin's sources;
+2. Include `git.d.ts` in your plugin's compilation.
+3. Get a hold of the API with the following snippet:
+
 ```javascript
-const gitPlugin = acode.require('git');
+const gitPlugin = acode.require("git");
 const gitAPI = gitPlugin.getAPI(1);
 
 // Get repository
-const repo = gitAPI.getRepository('/path/to/repositoy');
+const repo = gitAPI.getRepository("/path/to/repositoy");
 
 // repository status
 await repo.status();
 
 // Create a branch
-await repo.createBranch('feature-branch', true);
+await repo.createBranch("feature-branch", true);
 
 // Commit
-await repo.commit('Your commit message', { all: true });
+await repo.commit("Your commit message", { all: true });
 
 // Push to remote
-await repo.push('origin', 'main');
+await repo.push("origin", "main");
 ```
 
-### SCM API
+#### SCM API
 
 Access the SCM API:
 
 ```javascript
-const scm = acode.require('scm');
+const scm = acode.require("scm");
 
 // Create a source control provider
-const sourceControl = scm.createSourceControl('my-scm', 'My SCM', '/public');
+const sourceControl = scm.createSourceControl("my-scm", "My SCM", "/public");
 
 // Create resource groups
-const changes = sourceControl.createResourceGroup('changes', 'Changes');
+const changes = sourceControl.createResourceGroup("changes", "Changes");
 
 // Add resources
 changes.resourceStates = [
   {
-    resourceUri: '/path/to/file',
+    resourceUri: "/path/to/file",
     decorations: {
-      letter: 'M',
-      color: '#ffa500'
-    }
-  }
+      strikeThrough: false,
+    },
+  },
 ];
 ```
 
 See type definition files:
+
 - [`git.d.ts`](src/git/api/git.d.ts) - Git API types
 - [`sourceControl.d.ts`](src/scm/api/sourceControl.d.ts) - SCM API types
-
-For complete API documentation, see [DOCS.md](DOCS.md).
-
-## Customization
-
-### Settings Overview
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `enabled` | Enable/disable Git integration | `true` |
-| `useEditorAsCommitInput` | Use Acode editor for commit messages | `true` |
-| `useInotifywait` | Enable file system watching | `true` |
-| `decorationsEnabled` | Show file decorations | `true` |
-| `autorefresh` | Automatically refresh repository status | `true` |
-| `autofetch` | Automatically fetch from remote | `true` |
-| `autofetchPeriod` | Fetch interval in seconds | `180` |
-| `enableSmartCommit` | Commit all changes when nothing staged | `false` |
-| `confirmSync` | Confirm before sync operation | `true` |
-| `allowForcePush` | Allow force push operations | `false` |
-
-See all available settings in **Settings → Plugins → Git SCM**.
-
-### Command Palette Commands
-
-Press `Ctrl+Shift+P` and type Git:
-
-```
-Git: Clone
-Git: Init
-Git: Pull
-Git: Push
-Git: Fetch
-Git: Sync
-Git: Commit
-Git: Commit (Amend)
-Git: Undo Last Commit
-Git: Create Branch
-Git: Checkout
-Git: Merge Branch
-Git: Rebase Branch
-Git: Add Remote
-Git: Stage All Changes
-Git: Unstage All Changes
-....
-```
 
 ## Contributing
 
@@ -209,9 +145,12 @@ internal APIs.
 ## Support & Contact
 
 - **Issues**: [GitHub Issues](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/discussions)
 - **Email**: dikidjatar@gmail.com
 
 ---
 
-*Happy coding ✨*
+<div align="center">
+
+_Happy coding ✨_
+
+</div>

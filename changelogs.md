@@ -1,14 +1,105 @@
 # ChangeLog
 
-## [2.2.3] - 2026-09-02
+## [2.9.2] - 2026-07-19
+
+- Added SSH passphrase support for integrated SSH_ASKPASS by [@vamsi-krishna2580](http://github.com/vamsi-krishna2580)
+
+## [2.9.1] - 2026-07-10
+
+- Fixed diff truncated/invalid output and enhance diff view styling
+- Update docs link
+
+## [2.9.0] - 2026-07-04
+
+- Hide quick tools in diff view
+- Hide keyboard input in diff view
+- Added dynamic responsive overflow for the repository action
+  toolbar: when the sidebar narrows and there isn't enough horizontal
+  room for all primary/navigation actions, the ones that don't fit are
+  moved into the secondary "more actions" (⋮) menu, and automatically
+  reappear inline once space is available again.
+
+## [2.8.0] - 2026-07-01
+
+- Added readonly CodeMirror diff support with CodeMirror external dependency handling and merge view styling by [@bajrangCoder](https://github.com/bajrangCoder)
+- Added secure Git credential storage using the Acode plugin context for askpass by [@bajrangCoder](https://github.com/bajrangCoder)
+- Updated project documentation
+
+## [2.7.1] - 2026-06-26
+
+- Added new setting: `showCommitHistoryResourceGroup` default=true
+- Fixed errors like: `find: .: Permission denied`
+
+## [2.7.0] - 2026-06-26
+
+- Added commit history feature with detailed commit view and resource management by [@UnschooledGamer](https://github.com/UnschooledGamer)
+
+## [2.6.1] - 2026-06-21
+
+- Add 'add to .gitignore' scm menu for CodeMirror
+- Fixed badge decoration tab file missing
+
+## [2.6.0] - 2026-06-18
+
+- Added folder decorations for file
+- Add emphasized dot badge for folders.
+- Fixed missing decorations on nested subfolders after collapse/expand
+
+## [2.5.0] - 2026-06-10
+
+- Full worktree management: add, detect, open, and delete worktrees directly from the SCM view, with dedicated icons per worktree
+- Touch Swipe-Right Selection gesture support for selecting list items and repositories in the SCM view;
+- Added a distinct visual indicator for the currently active/selected repository in the SCM repositories list
+- Added dedicated icons for conflict and change states
+  in the Git branch UI
+- Update icons for repository, SCM, sync, and tag; replaced with new vscode codicons for better
+  visual consistency
+- Improved SCM Repositories View
+- Fixed an issue where the repository failed to auto-initialize when `git.enabled` was true.
+- Fixed some bugs
+
+## [2.4.0] - 2026-05-23
+
+### Add support for CodeMirror:
+
+- Remove `Add to .gitignore` menu
+- Diff is not supported in CodeMirror version
+
+## [2.3.1] - 2026-02-21
+
+- Improve and optimized file tree and file tab decoration
+- Added new setting `Git: Refresh On Save File` which when enabled will automatically update the repository with changes. Default to `false` (You can enable this in Git SCM settings)
+- Added new setting `Git: Show Decorations In File Tree` to control file decoration in the file tree/file explorer
+- Optimized performance and stability
+
+## [2.3.0] - 2026-02-19
+
+- Remove `inotifywait` file watcher and automatic repository refresh on file save for improved performance (Currently, when saving a file and if the file is in the repository, the plugin will automatically update the file. For other changes such as new files, deleted files, changes outside the Acode application or others, you must refresh manually for the changes to take effect)
+- SCM repository now auto-updates when git commands (add, commit, pull, push, etc.) are executed in the terminal
+- Added support for detecting and handling unsafe repository
+- Refined SCM View layout and styling for improved visual consistency
+- Fixed decoration files persist even if the repository is closed
+- Fixed configuration issues during plugin updates
+
+## [2.2.4] - 2026-02-18
+
+- Improve file tree decoration
+- Fix loss of decoration when folder is expanded/collapsed
+- Fixed decoration still shows after commits/discard changes
+- Fixed several bugs related to file decoration
+
+## [2.2.3] - 2026-02-09
+
 - Refined UI decorations and styling
 - Optimized performance and stability
 
-## [2.2.2] - 2026-29-01
+## [2.2.2] - 2026-01-29
+
 - Optimized performance and stability
 - Fixed some bugs
 
 ## [2.2.1] - 2026-01-18
+
 - Improved UI
 - Add remote source
 - Fixed some bugs
@@ -16,6 +107,7 @@
 ## [2.2.0] - 2026-01-05
 
 Features Added:
+
 - Git File System support (git:// URI scheme) for accessing files from any Git ref (branches, tags, commits)
 - Diff preview and visualization with file tab decorations
 - Complete Git stash management (save, pop, drop, apply)
@@ -29,10 +121,12 @@ Features Added:
 - Enhanced resource interaction with click-to-open functionality
 
 Bug Fixes:
+
 - Improved URI handling
 - **Error handling for checkout operations**: Better error messages and handling for checkout operations with stash/migrate options
 
 ## [2.1.2] - 2026-01-01
+
 - Added support for monochrome icon options
 - Fixed sync and publish commands
 - Updated Acode terminal files path to use dynamic package name
@@ -50,6 +144,7 @@ Bug Fixes:
 - Added "Open In Integrated" menu in scm menu
 
 ## [2.0.0] - 2025-12-21
+
 ### Rewrite - Native Git Integration
 
 **This is a major breaking release with a complete architecture!**
@@ -64,6 +159,7 @@ Version 2.0.0 represents a fundamental reimplementation of the Git SCM plugin, m
 - **Settings reset**: Previous plugin settings will not carry over
 
 #### Native Git Integration
+
 - **Real Git binary execution**: Direct communication with system Git via Acode Executor API
 - **Full Git compatibility**: 100% compatibility with all Git features and operations
 
@@ -79,6 +175,7 @@ If you're upgrading from v1.x:
 ## [1.3.0] - 2025-10-06
 
 ### Background Server and URI Handling Improvements
+
 - Changes:
   - Added background server
   - Server can now run in background
@@ -90,6 +187,7 @@ If you're upgrading from v1.x:
 ## [1.2.0] - 2025-10-03
 
 ### Improved Server Integration and UI
+
 - Added automatic Git server
   - New start server button for one-click server setup
   - Automated server installation if not present
@@ -101,6 +199,7 @@ If you're upgrading from v1.x:
 ## [1.1.0] - 2025-10-01
 
 ### Enhanced Branch UI and Information
+
 - Improved branch information display with more detailed view
 - Added local and remote branch status indicators
 - Added commit status information (ahead/behind)

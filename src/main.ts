@@ -4,7 +4,8 @@ import { config } from './base/config';
 import { decorationService } from './base/decorationService';
 import { Disposable, IDisposable } from './base/disposable';
 import { Event } from './base/event';
-import { registerFilesDecorations } from './base/fileDecoration';
+import { getExecutor } from './base/executor';
+import { FileTreeDecoration } from './base/fileTreeDecoration';
 import { GitPluginImpl } from './git/api/plugin';
 import { AskPass } from './git/askpass';
 import { CommandCenter } from './git/commands';
@@ -82,11 +83,16 @@ const defaultGitConfig: IGitConfig = {
 	autofetchPeriod: 180,
 	detectSubmodules: true,
 	detectSubmodulesLimit: 10,
-	useInotifywait: true,
 	decorationsEnabled: true,
 	promptToSaveFilesBeforeStash: 'always',
 	useCommitInputAsStashMessage: false,
-	openDiffOnClick: true
+	openDiffOnClick: true,
+	showDecorationInFileTree: true,
+	refreshOnSaveFile: false,
+	optimisticUpdate: true,
+	detectWorktrees: false,
+	detectWorktreesLimit: 20,
+	showCommitHistoryResourceGroup: false
 }
 
 async function destroy() {
@@ -96,7 +102,7 @@ async function destroy() {
 async function findShell(logger?: LogOutputChannel): Promise<string | undefined> {
 	const find = async (shell: string) => {
 		try {
-			const result = await Executor.execute(`which ${shell}`, true);
+			const result = await getExecutor().execute(`which ${shell}`, true);
 			return result.trim();
 		} catch (err) {
 			logger?.error(`Find ${shell} error: ${err}`);
@@ -112,7 +118,7 @@ async function findShell(logger?: LogOutputChannel): Promise<string | undefined>
 	return result;
 }
 
-async function createModel(logger: LogOutputChannel, disposables: IDisposable[]): Promise<Model> {
+async function createModel(logger: LogOutputChannel, disposables: IDisposable[], ctx?: Acode.PluginContext | null): Promise<Model> {
 	const shell = await findShell(logger);
 	const info = await findGit();
 
@@ -128,7 +134,7 @@ async function createModel(logger: LogOutputChannel, disposables: IDisposable[])
 		logger.error(`[main] Failed to create git IPC: ${err}`);
 	}
 
-	const askpass = new AskPass(rootPath, ipcServer, logger);
+	const askpass = new AskPass(rootPath, ipcServer, logger, ctx);
 	const gitEditor = new GitEditor(rootPath, ipcServer, logger);
 	await askpass.setupScripts();
 	await gitEditor.setupScript();
@@ -230,20 +236,28 @@ async function initialize(baseUrl: string, options: Acode.PluginInitOptions): Pr
 	await config.init('vcgit', defaultGitConfig);
 	disposables.push(config);
 
-	acode.addIcon('branch', baseUrl + 'assets/branch.svg', { monochrome: true });
-	acode.addIcon('sync', baseUrl + 'assets/sync.svg', { monochrome: true });
-	acode.addIcon('cloud-upload', baseUrl + 'assets/cloud-upload.svg', { monochrome: true });
-	acode.addIcon('debug-disconnect', baseUrl + 'assets/debug-disconnect.svg', { monochrome: true });
-	acode.addIcon('tag', baseUrl + 'assets/tag.svg', { monochrome: true });
-	acode.addIcon('loading', baseUrl + 'assets/loading.svg', { monochrome: true });
-	acode.addIcon('git-commit', baseUrl + 'assets/git-commit.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_git_branch', baseUrl + 'assets/vscode-codicons_git_branch.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_cloud_upload', baseUrl + 'assets/vscode-codicons_cloud_upload.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_sync', baseUrl + 'assets/vscode-codicons_sync.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_tag', baseUrl + 'assets/vscode-codicons_tag.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_loading', baseUrl + 'assets/vscode-codicons_loading.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_debug_disconnect', baseUrl + 'assets/vscode-codicons_debug_disconnect.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_git_commit', baseUrl + 'assets/vscode-codicons_git_commit.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_archive', baseUrl + 'assets/vscode-codicons_archive.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_worktree', baseUrl + 'assets/vscode-codicons_worktree.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_list_tree', baseUrl + 'assets/vscode-codicons_list_tree.svg', { monochrome: true });
+
+	acode.addIcon('vscode-codicons_git_branch_conflicts', baseUrl + 'assets/vscode-codicons_git_branch_conflicts.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_git_branch_staged_changes', baseUrl + 'assets/vscode-codicons_git_branch_staged_changes.svg', { monochrome: true });
+	acode.addIcon('vscode-codicons_git_branch_changes', baseUrl + 'assets/vscode-codicons_git_branch_changes.svg', { monochrome: true });
+
 	const styles = tag('link', { rel: 'stylesheet', href: baseUrl + 'main.css' });
 	document.head.appendChild(styles);
 	disposables.push(Disposable.toDisposable(() => styles.remove()));
 
 	const scmViewContainer = scm.getViewContainer();
 	initializeViews(scmViewContainer);
-	disposables.push(registerFilesDecorations());
+	disposables.push(new FileTreeDecoration());
 
 	if (!await Terminal.isInstalled()) {
 		App.setContext('acode.terminalMissing', true);
@@ -264,12 +278,12 @@ async function initialize(baseUrl: string, options: Acode.PluginInitOptions): Pr
 		const onConfigChange = Event.filter(config.onDidChangeConfiguration, e => e.affectsConfiguration('vcgit'));
 		const onEnabled = Event.filter(onConfigChange, () => config.get('vcgit')?.enabled === true);
 		const result = new GitPluginImpl();
-		Event.toPromise(onEnabled).then(async () => result.model = await createModel(logger, disposables));
+		Event.toPromise(onEnabled).then(async () => result.model = await createModel(logger, disposables, options.ctx));
 		return result;
 	}
 
 	try {
-		const model = await createModel(logger, disposables);
+		const model = await createModel(logger, disposables, options.ctx);
 		return new GitPluginImpl(model);
 	} catch (err: any) {
 		console.warn(err.message);
@@ -328,11 +342,12 @@ function initializeViews(scmViewContainer: SourceControlViewContainer): void {
 	});
 
 	scmViewContainer.registerViewWelcomeContent({
-		content: 'In order to use Git features, you can open a folder containing a Git repository or clone from a URL.\n[Open Folder](command:openFolder)\n[Clone Repository](command:git.cloneRecursive)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro#README).',
+		content: 'In order to use Git features, you can open a folder containing a Git repository or clone from a URL.\n[Open Folder](command:openFolder)\n[Clone Repository](command:git.cloneRecursive)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/blob/main/docs/overview.md).',
 		when: () => config.get('vcgit')?.enabled === true
 			&& !App.getContext<boolean>('acode.terminalMissing')
 			&& !App.getContext<boolean>('git.missing')
 			&& App.getContext<number>('addedFolderCount', addedFolder.length) === 0
+			&& App.getContext<number>('git.unsafeRepositoryCount') === 0
 			&& App.getContext<number>('git.closedRepositoryCount') === 0
 	});
 
@@ -346,24 +361,26 @@ function initializeViews(scmViewContainer: SourceControlViewContainer): void {
 	});
 
 	scmViewContainer.registerViewWelcomeContent({
-		content: 'Install Git, a popular source control system, to track code changes and collaborate with others. Learn more in our [Git guides](https://github.com/dikidjatar/acode-plugin-version-control-gitpro#README).',
+		content: 'Install Git, a popular source control system, to track code changes and collaborate with others. Learn more in our [Git guides](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/blob/main/docs/overview.md).',
 		when: () => config.get('vcgit')?.enabled === true
 			&& !App.getContext<boolean>('acode.terminalMissing')
 			&& App.getContext<boolean>('git.missing') === true
 	});
 
 	scmViewContainer.registerViewWelcomeContent({
-		content: "The folder currently open doesn't have a Git repository. You can initialize a repository which will enable source control features powered by Git.\n[Initialize Repository](command:git.init?%5Btrue%5D)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro#README).",
+		content: "The folder currently open doesn't have a Git repository. You can initialize a repository which will enable source control features powered by Git.\n[Initialize Repository](command:git.init?%5Btrue%5D)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/blob/main/docs/overview.md).",
 		when: () => config.get('vcgit')?.enabled === true
 			&& !App.getContext<boolean>('acode.terminalMissing')
 			&& !App.getContext<boolean>('git.missing')
 			&& App.getContext<'initialized' | 'uninitialized'>('git.state') === 'initialized'
 			&& App.getContext<number>('addedFolderCount', addedFolder.length) !== 0
-			&& App.getContext<number>('scm.providerCount') === 0 && App.getContext<number>('git.closedRepositoryCount') === 0
+			&& App.getContext<number>('scm.providerCount') === 0
+			&& App.getContext<number>('git.unsafeRepositoryCount') === 0
+			&& App.getContext<number>('git.closedRepositoryCount') === 0
 	});
 
 	scmViewContainer.registerViewWelcomeContent({
-		content: 'A Git repository was found that was previously closed.\n[Reopen Closed Repository](command:git.reopenClosedRepositories)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro#README).',
+		content: 'A Git repository was found that was previously closed.\n[Reopen Closed Repository](command:git.reopenClosedRepositories)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/blob/main/docs/overview.md).',
 		when: () => config.get('vcgit')?.enabled === true
 			&& !App.getContext<boolean>('git.missing')
 			&& App.getContext<'initialized' | 'uninitialized'>('git.state') === 'initialized'
@@ -371,11 +388,27 @@ function initializeViews(scmViewContainer: SourceControlViewContainer): void {
 	});
 
 	scmViewContainer.registerViewWelcomeContent({
-		content: 'Git repositories were found that were previously closed.\n[Reopen Closed Repositories](command:git.reopenClosedRepositories)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro#README).',
+		content: 'Git repositories were found that were previously closed.\n[Reopen Closed Repositories](command:git.reopenClosedRepositories)\nTo learn more about how to use Git and source control in Acode [read our docs](https://github.com/dikidjatar/acode-plugin-version-control-gitpro/blob/main/docs/overview.md).',
 		when: () => config.get('vcgit')?.enabled === true
 			&& !App.getContext<boolean>('git.missing')
 			&& App.getContext<'initialized' | 'uninitialized'>('git.state') === 'initialized'
 			&& App.getContext<number>('git.closedRepositoryCount', 0) > 1
+	});
+
+	scmViewContainer.registerViewWelcomeContent({
+		content: 'The detected Git repository is potentially unsafe as the folder is owned by someone other than the current user.\n[Manage Unsafe Repositories](command:git.manageUnsafeRepositories)\nTo learn more about unsafe repositories [read our docs](https://aka.ms/vscode-git-unsafe-repository).',
+		when: () => config.get('vcgit')?.enabled === true
+			&& !App.getContext<boolean>('git.missing')
+			&& App.getContext<'initialized' | 'uninitialized'>('git.state') === 'initialized'
+			&& App.getContext<number>('git.unsafeRepositoryCount') === 1
+	});
+
+	scmViewContainer.registerViewWelcomeContent({
+		content: 'The detected Git repositories are potentially unsafe as the folders are owned by someone other than the current user.\n[Manage Unsafe Repositories](command:git.manageUnsafeRepositories)\nTo learn more about unsafe repositories [read our docs](https://aka.ms/vscode-git-unsafe-repository).',
+		when: () => config.get('vcgit')?.enabled === true
+			&& !App.getContext<boolean>('git.missing')
+			&& App.getContext<'initialized' | 'uninitialized'>('git.state') === 'initialized'
+			&& App.getContext<number>('git.unsafeRepositoryCount') > 1
 	});
 }
 
@@ -398,7 +431,7 @@ function initializeMenus(logger: LogOutputChannel): void {
 	// Repository menu
 	SCMMenuRegistry.registerMenuItems('scm/repository/menu', [
 		{
-			command: { id: 'git.refresh', title: '<span class="icon refresh"></span>' },
+			command: { id: 'git.refresh', title: 'Refresh', icon: 'refresh' },
 			group: 'navigation',
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git',
 			enablement: () => !App.getContext<boolean>('git.operationInProgress')
@@ -468,6 +501,18 @@ function initializeMenus(logger: LogOutputChannel): void {
 			group: '2_main@6',
 			submenu: true,
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git'
+		},
+		{
+			command: { id: 'git.worktrees', title: 'Worktrees' },
+			group: '2_main@7',
+			submenu: true,
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git'
+		},
+		{
+			command: { id: 'git.history', title: 'History' },
+			group: '2_main@8',
+			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress')
 		},
 		{
 			command: { id: 'git.showOutput', title: 'Show Git Output' },
@@ -593,6 +638,18 @@ function initializeMenus(logger: LogOutputChannel): void {
 			command: { id: 'git.unstage', title: 'Unstage Changes' },
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'index',
 			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		},
+		{
+			command: { id: 'git.ignore', title: 'Add to .gitignore' },
+			when: (ctx: SCMMenuContext) =>
+				ctx.scmProvider === 'git' &&
+				ctx.scmResourceGroup === 'workingTree'
+		},
+		{
+			command: { id: 'git.ignore', title: 'Add to .gitignore' },
+			when: (ctx: SCMMenuContext) =>
+				ctx.scmProvider === 'git' &&
+				ctx.scmResourceGroup === 'untracked'
 		}
 	]);
 
@@ -608,6 +665,13 @@ function initializeMenus(logger: LogOutputChannel): void {
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'index'
 		},
 		{
+			command: { id: 'git.ignore', title: 'Add to .gitignore' },
+			group: '1_modification@3',
+			when: (ctx: SCMMenuContext) =>
+				ctx.scmProvider === 'git' &&
+				ctx.scmResourceGroup === 'workingTree'
+		},
+		{
 			command: { id: 'git.stage', title: 'Stage Changes' },
 			group: '1_modification',
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'workingTree'
@@ -626,6 +690,13 @@ function initializeMenus(logger: LogOutputChannel): void {
 			command: { id: 'git.clean', title: 'Discard Changes' },
 			group: '1_modification',
 			when: (ctx: SCMMenuContext) => ctx.scmProvider === 'git' && ctx.scmResourceGroup === 'untracked'
+		},
+		{
+			command: { id: 'git.ignore', title: 'Add to .gitignore' },
+			group: '1_modification@3',
+			when: (ctx: SCMMenuContext) =>
+				ctx.scmProvider === 'git' &&
+				ctx.scmResourceGroup === 'untracked'
 		},
 	]);
 
@@ -871,6 +942,28 @@ function initializeMenus(logger: LogOutputChannel): void {
 			command: { id: 'git.deleteRemoteTag', title: 'Delete Remote Tag...' },
 			group: 'tags@3',
 			enablement: () => !App.getContext<boolean>('git.operationInProgress')
+		}
+	]);
+
+	// Worktrees
+	SCMMenuRegistry.registerMenuItems('git.worktrees', [
+		{
+			command: { id: 'git.openWorktree', title: 'Open Worktree' },
+			group: 'openWorktrees@1',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+			when: (ctx: SCMMenuContext) => ctx.scmProviderContext === 'worktree'
+		},
+		{
+			command: { id: 'git.createWorktree', title: 'Create Worktree...' },
+			group: 'worktrees@1',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+			when: (ctx: SCMMenuContext) => ctx.scmProviderContext === 'repository'
+		},
+		{
+			command: { id: 'git.deleteWorktree2', title: 'Delete Worktree' },
+			group: 'worktrees@2',
+			enablement: () => !App.getContext<boolean>('git.operationInProgress'),
+			when: (ctx: SCMMenuContext) => ctx.scmProviderContext === 'worktree'
 		}
 	]);
 }
@@ -1249,12 +1342,6 @@ function gitPluginSettings(): Acode.PluginSettings {
 				promptType: 'number'
 			},
 			{
-				key: 'useInotifywait',
-				checkbox: configs.useInotifywait,
-				text: 'Git: Use inotifywait',
-				info: 'Use inotifywait for filesystem watcher'
-			},
-			{
 				key: 'decorationsEnabled',
 				checkbox: configs.decorationsEnabled,
 				text: 'Git: Decorations',
@@ -1278,6 +1365,44 @@ function gitPluginSettings(): Acode.PluginSettings {
 				checkbox: configs.openDiffOnClick,
 				text: 'Git: Open Diff On Click',
 				info: 'Controls whether the diff editor should be opened when clicking a change. Otherwise the regular editor will be opened.'
+			},
+			{
+				key: 'showDecorationInFileTree',
+				checkbox: configs.showDecorationInFileTree,
+				text: 'Git: Show Decorations In File Tree',
+				info: 'Controls whether Git contributes colors and badges to files in the file explorer.'
+			},
+			{
+				key: 'refreshOnSaveFile',
+				checkbox: configs.refreshOnSaveFile,
+				text: 'Git: Refresh On Save File',
+				info: 'Controls whether to refresh view when saving a file that has changes.'
+			},
+			{
+				key: 'optimisticUpdate',
+				checkbox: configs.optimisticUpdate,
+				text: 'Git: Optimistic Update (Experimental)',
+				info: 'Controls whether to optimistically update the state of the Source Control view after running git commands.'
+			},
+			{
+				key: 'detectWorktrees',
+				checkbox: configs.detectWorktrees,
+				text: 'Git: Detect Worktrees',
+				info: 'Controls whether to automatically detect Git worktrees.'
+			},
+			{
+				key: 'detectWorktreesLimit',
+				value: configs.detectWorktreesLimit,
+				text: 'Git: Detect Worktrees Limit',
+				info: 'Controls the limit of Git worktrees detected.',
+				prompt: 'Detect Worktrees Limit',
+				promptType: 'number'
+			},
+			{
+				key: 'showCommitHistoryResourceGroup',
+				checkbox: configs.showCommitHistoryResourceGroup,
+				text: 'Git: Show Commit History Resource Group',
+				info: 'Show the Commit History resource group.',
 			}
 		],
 		cb(key: string, value: unknown) {

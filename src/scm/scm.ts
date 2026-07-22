@@ -48,35 +48,68 @@ function compareResourceStatesDecorations(a: SourceControlResourceDecorations, b
     return a.strikeThrough ? 1 : -1;
   }
 
-  if (a.color && b.color) {
-    return a.color.localeCompare(b.color);
-  } else if (a.color) {
+  if (a.icon && b.icon) {
+    return a.icon.localeCompare(b.icon);
+  } else if (a.icon) {
     return 1;
-  } else if (b.color) {
+  } else if (b.icon) {
     return -1;
   }
 
-  if (a.letter && b.letter) {
-    return a.letter.localeCompare(b.letter);
-  } else if (a.letter) {
-    return 1;
-  } else if (b.letter) {
-    return -1;
+  return 0;
+}
+
+function compareCommands(a: SourceControlCommandAction, b: SourceControlCommandAction): number {
+  if (a.id !== b.id) {
+    return a.id < b.id ? -1 : 1;
   }
 
-  if (!a.icon && !b.icon) {
+  if (a.title !== b.title) {
+    return a.title < b.title ? -1 : 1;
+  }
+
+  if (a.arguments === b.arguments) {
     return 0;
-  } else if (!a.icon) {
+  } else if (!a.arguments) {
     return -1;
-  } else if (!b.icon) {
+  } else if (!b.arguments) {
     return 1;
+  } else if (a.arguments.length !== b.arguments.length) {
+    return a.arguments.length - b.arguments.length;
   }
 
-  return a.icon.localeCompare(b.icon);
+  for (let i = 0; i < a.arguments.length; i++) {
+    const aArg: any = a.arguments[i];
+    const bArg: any = b.arguments[i];
+
+    if (aArg === bArg) {
+      continue;
+    }
+
+    if (typeof aArg === 'string' && typeof bArg === 'string' && aArg.toLowerCase() === bArg.toLowerCase()) {
+      continue;
+    }
+
+    return aArg < bArg ? -1 : 1;
+  }
+
+  return 0;
 }
 
 function compareResourceStates(a: SourceControlResourceState, b: SourceControlResourceState): number {
-  let result = comparePaths(a.resourceUri, b.resourceUri);
+  let result = comparePaths(a.resourceUri, b.resourceUri, true);
+
+  if (result !== 0) {
+    return result;
+  }
+
+  if (a.command && b.command) {
+    result = compareCommands(a.command, b.command);
+  } else if (a.command) {
+    return 1;
+  } else if (b.command) {
+    return -1;
+  }
 
   if (result !== 0) {
     return result;
@@ -185,6 +218,15 @@ class SourceControlResourceGroupImpl implements SourceControlResourceGroup {
     this.#scm.updateGroupLabel(this._sourceControlHandle, this.handle, label);
   }
 
+  private _contextValue: string | undefined = undefined;
+  get contextValue(): string | undefined {
+    return this._contextValue;
+  }
+  set contextValue(contextValue: string | undefined) {
+    this._contextValue = contextValue;
+    this.#scm.updateGroup(this._sourceControlHandle, this.handle, { contextValue: this._contextValue, hideWhenEmpty: this._hideWhenEmpty });
+  }
+
   private _hideWhenEmpty: boolean | undefined = undefined;
   get hideWhenEmpty(): boolean | undefined { return this._hideWhenEmpty };
   set hideWhenEmpty(hideWhenEmpty: boolean | undefined) {
@@ -240,10 +282,9 @@ class SourceControlResourceGroupImpl implements SourceControlResourceGroup {
 
         const icon = r.decorations?.icon;
         const strikeThrough = r.decorations && !!r.decorations.strikeThrough;
-        const letter = r.decorations?.letter;
-        const color = r.decorations?.color;
+        const contextValue = r.contextValue || '';
 
-        const rawResource = [handle, sourceUri, icon, strikeThrough, letter, color] as SCMRawResource;
+        const rawResource = [handle, sourceUri, icon, strikeThrough, contextValue] as SCMRawResource;
 
         return { rawResource, handle };
       });
@@ -377,6 +418,20 @@ class SourceControlImpl implements SourceControl {
     return this._rootUri;
   }
 
+  private _contextValue: string | undefined = undefined;
+  get contextValue(): string | undefined {
+    return this._contextValue;
+  }
+
+  set contextValue(contextValue: string | undefined) {
+    if (this._contextValue === contextValue) {
+      return;
+    }
+
+    this._contextValue = contextValue;
+    this.#scm.updateSourceControl(this.handle, { contextValue });
+  }
+
   private _inputBox: SourceControlInputBox;
   get inputBox(): SourceControlInputBox { return this._inputBox; }
 
@@ -444,9 +499,9 @@ class SourceControlImpl implements SourceControl {
     return group;
   }
 
-  @debounce(100)
+  @debounce(300)
   eventuallyAddResourceGroups(): void {
-    const groups: [number /* handle */, string /* id */, string /* label */, boolean | undefined /* hideWhenEmpty */][] = [];
+    const groups: [number /* handle */, string /* id */, string /* label */, boolean | undefined /* hideWhenEmpty */, string | undefined /* contextValue */][] = [];
     const splices: SCMRawResourceSplices[] = [];
 
     for (const [group, disposable] of this.createdResourceGroups) {
@@ -464,7 +519,7 @@ class SourceControlImpl implements SourceControl {
         this.#scm.unregisterGroup(this.handle, group.handle);
       });
 
-      groups.push([group.handle, group.id, group.label, group.hideWhenEmpty]);
+      groups.push([group.handle, group.id, group.label, group.hideWhenEmpty, group.contextValue]);
 
       const snapshot = group._takeResourceStateSnapshot();
 
@@ -479,7 +534,7 @@ class SourceControlImpl implements SourceControl {
     this.createdResourceGroups.clear();
   }
 
-  @debounce(100)
+  @debounce(300)
   eventuallyUpdateResourceStates(): void {
     const splices: SCMRawResourceSplices[] = [];
 
@@ -648,8 +703,9 @@ export namespace scm {
     const appSettings = acode.require('settings');
     appSettings.uiSettings['scm-settings'] = scmSettings();
 
-    acode.addIcon('scm', baseUrl + 'assets/scm.svg', { monochrome: true });
-    acode.addIcon('repo', baseUrl + 'assets/repo.svg', { monochrome: true });
+    acode.addIcon('scm', baseUrl + 'assets/vscode-codicons_source_control.svg', { monochrome: true });
+    acode.addIcon('vscode-codicons_repo', baseUrl + 'assets/vscode-codicons_repo.svg', { monochrome: true });
+    acode.addIcon('vscode-codicons_repo_selected', baseUrl + 'assets/vscode-codicons_repo_selected.svg', { monochrome: true });
 
     const scmService = new SCMService();
     const scmViewService = new SCMViewService(scmService);

@@ -3,22 +3,25 @@
   "id": "acode.plugin.version.control.gitpro",
   "name": "Git SCM",
   "main": "main.js",
-  "version": "2.2.3",
+  "version": "2.9.2",
   "repository": "https://github.com/dikidjatar/acode-plugin-version-control-gitpro.git",
   "icon": "icon.png",
   "files": [
-    "assets/scm.svg",
-    "assets/dash.svg",
-    "assets/branch.svg",
-    "assets/remote.svg",
-    "assets/repo.svg",
-    "assets/sync.svg",
-    "assets/cloud-upload.svg",
-    "assets/tag.svg",
-    "assets/debug-disconnect.svg",
-    "assets/refresh.svg",
-    "assets/loading.svg",
-    "assets/git-commit.svg"
+    "assets/vscode-codicons_source_control.svg",
+    "assets/vscode-codicons_loading.svg",
+    "assets/vscode-codicons_tag.svg",
+    "assets/vscode-codicons_sync.svg",
+    "assets/vscode-codicons_debug_disconnect.svg",
+    "assets/vscode-codicons_git_commit.svg",
+    "assets/vscode-codicons_repo.svg",
+    "assets/vscode-codicons_cloud_upload.svg",
+    "assets/vscode-codicons_git_branch.svg",
+    "assets/vscode-codicons_archive.svg",
+    "assets/vscode-codicons_worktree.svg",
+    "assets/vscode-codicons_list_tree.svg",
+    "assets/vscode-codicons_git_branch_conflicts.svg",
+    "assets/vscode-codicons_git_branch_staged_changes.svg",
+    "assets/vscode-codicons_git_branch_changes.svg"
   ],
   "minVersionCode": 290,
   "license": "MIT",
@@ -29,5 +32,27 @@
     "name": "Diki Djatar",
     "email": "dikidjatar@gmail.com",
     "github": "dikidjatar"
-  }
+  },
+  "contributors": [
+    {
+      "name": "UnschooledGamer",
+      "github": "UnschooledGamer",
+      "role": "contributor"
+    },
+    {
+      "name": "Victor Elijha",
+      "github": "Victozee26",
+      "role": "contributor"
+    },
+    {
+      "name": "Raunak Raj",
+      "github": "bajrangCoder",
+      "role": "contributor"
+    },
+    {
+      "name": "vamsi-krishna2580",
+      "github": "vamsi-krishna2580",
+      "role": "contributor"
+    }
+  ]
 }

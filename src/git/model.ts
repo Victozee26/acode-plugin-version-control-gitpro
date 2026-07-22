@@ -3,11 +3,13 @@ import { config } from "../base/config";
 import { debounce, memoize, sequentialize, throttle } from "../base/decorators";
 import { Disposable, IDisposable } from "../base/disposable";
 import { Emitter, Event } from "../base/event";
+import { getExecutor } from "../base/executor";
 import { uriToPath } from "../base/uri";
 import { SourceControl, SourceControlResourceGroup } from "../scm/api/sourceControl";
 import { ApiRepository } from "./api/api1";
 import { CredentialsProvider, PickRemoteSourceOptions, PublishEvent, PushErrorHandler, RemoteSource, RemoteSourceProvider, RemoteSourcePublisher, APIState as State } from "./api/git";
 import { AskPass } from "./askpass";
+import { item, showDialogMessage } from "./dialog";
 import { Git } from "./git";
 import { getInputHintResult, HintItem, InputHint, showInputHints } from "./hints";
 import { LogOutputChannel } from "./logger";
@@ -31,7 +33,7 @@ class RepositoryHint implements HintItem {
       .join(' ');
   }
 
-  @memoize get icon(): string { return 'repo'; }
+  @memoize get icon(): string { return 'vscode-codicons_repo'; }
 
   constructor(public readonly repository: Repository) { }
 }
@@ -78,6 +80,44 @@ class ClosedRepositoriesManager {
   private onDidChangeRepositories(): void {
     App.setContext('git.closedRepositories', [...this._repositories.values()]);
     App.setContext('git.closedRepositoryCount', this._repositories.size);
+  }
+}
+
+class UnsafeRepositoriesManager {
+
+  private _repositories = new Map<string, string>();
+  get repositories(): string[] {
+    return [...this._repositories.keys()];
+  }
+
+  constructor() {
+    this.onDidChangeRepositories();
+  }
+
+  addRepository(repository: string, path: string): void {
+    this._repositories.set(repository, path);
+    this.onDidChangeRepositories();
+  }
+
+  deleteRepository(repository: string): boolean {
+    const result = this._repositories.delete(repository);
+    if (result) {
+      this.onDidChangeRepositories();
+    }
+
+    return result;
+  }
+
+  getRepositoryPath(repository: string): string | undefined {
+    return this._repositories.get(repository);
+  }
+
+  hasRepository(repository: string): boolean {
+    return this._repositories.has(repository);
+  }
+
+  private onDidChangeRepositories(): void {
+    App.setContext('git.unsafeRepositoryCount', this._repositories.size);
   }
 }
 
@@ -241,6 +281,11 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
 
   private pushErrorHandlers = new Set<PushErrorHandler>();
 
+  private _unsafeRepositoriesManager: UnsafeRepositoriesManager;
+  get unsafeRepositories(): string[] {
+    return this._unsafeRepositoriesManager.repositories;
+  }
+
   private _closedRepositoriesManager: ClosedRepositoriesManager;
   get closedRepositories(): string[] {
     return [...this._closedRepositoriesManager.repositories];
@@ -254,8 +299,10 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
     readonly logger: LogOutputChannel
   ) {
     this._closedRepositoriesManager = new ClosedRepositoriesManager();
+    this._unsafeRepositoriesManager = new UnsafeRepositoriesManager();
 
     App.onDidChangeWorkspaceFolder(this.onDidChangeWorkspaceFolder, this, this.disposables);
+    config.onDidChangeConfiguration(this.onDidChangeConfiguration, this, this.disposables);
 
     this.setState('uninitialized');
     this.doInitialScan().finally(() => this.setState('initialized'));
@@ -366,6 +413,23 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
     }
   }
 
+  private onDidChangeConfiguration(): void {
+    const gitConfig = config.get('vcgit')!;
+    const enabled = gitConfig.enabled;
+
+    const possibleRepositoryFolders = enabled === true
+      ? addedFolder.filter(folder => !this.getOpenRepository(folder.url))
+      : [];
+
+    const openRepositoriesToDispose = enabled !== true
+      ? this.openRepositories
+      : [];
+
+    this.logger.info(`[Model][onDidChangeConfiguration] Workspace folders: [${possibleRepositoryFolders.map(p => uriToPath(p.url)).join(', ')}]`);
+    possibleRepositoryFolders.forEach(p => this.openRepository(uriToPath(p.url)));
+    openRepositoriesToDispose.forEach(r => r.dispose());
+  }
+
   @sequentialize
   async openRepository(repoPath: string, openIfClosed = false): Promise<void> {
     this.logger.info(`[Model][openRepository] Repository: ${repoPath}`);
@@ -395,6 +459,12 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
 
       if (unsafeRepositoryMatch && unsafeRepositoryMatch.length === 3) {
         this.logger.info(`[Model][openRepository] Unsafe repository: ${repositoryRoot}`);
+
+        if (this._state === 'initialized' && !this._unsafeRepositoriesManager.hasRepository(repositoryRoot)) {
+          this.showUnsafeRepositoryNotification();
+        }
+
+        this._unsafeRepositoriesManager.addRepository(repositoryRoot, unsafeRepositoryMatch[2]);
         return;
       }
 
@@ -436,7 +506,7 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
 
   private async getRepositoryRootRealPath(repositoryRoot: string): Promise<string | undefined> {
     try {
-      const result = await Executor.execute(`realpath "${repositoryRoot}"`, true);
+      const result = await getExecutor().execute(`realpath "${repositoryRoot}"`, true);
       const repositoryRootRealPath = result.trim();
       return !pathEquals(repositoryRoot, repositoryRootRealPath) ? repositoryRootRealPath : undefined;
     } catch (error) {
@@ -453,6 +523,8 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
     const gitConfig = config.get('vcgit')!;
     const shouldDetectSubmodules = gitConfig.detectSubmodules;
     const submodulesLimit = gitConfig.detectSubmodulesLimit;
+    const shouldDetectWorktrees = gitConfig.detectWorktrees;
+    const worktreesLimit = gitConfig.detectWorktreesLimit;
 
     const checkForSubmodules = () => {
       if (!shouldDetectSubmodules) {
@@ -474,9 +546,30 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
         });
     }
 
+    const checkForWorktrees = () => {
+      if (!shouldDetectWorktrees) {
+        this.logger.info('[Model][open] Automatic detection of git worktrees is not enabled.');
+        return;
+      }
+
+      if (repository.worktrees.length > worktreesLimit) {
+        acode.alert('WARNING', `The "${Url.basename(repository.root)}" repository has ${repository.worktrees.length} worktrees which won't be opened automatically. You can still open each one individually by opening a file within.`);
+        statusListener.dispose();
+      }
+
+      repository.worktrees
+        .slice(0, worktreesLimit)
+        .forEach(w => {
+          this.logger.info(`[Model][open] Opening worktree: '${w.path}'`);
+          this.eventuallyScanPossibleGitRepository(w.path);
+        });
+    }
+
     const statusListener = repository.onDidRunGitStatus(() => {
       checkForSubmodules();
+      checkForWorktrees();
     });
+    checkForWorktrees();
 
     const updateOperationInProgressContext = () => {
       let operationInProgress = false;
@@ -562,7 +655,7 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
 
     try {
       // Use the repository real path
-      const result = await Executor.execute(`realpath "${repoPath}"`, true);
+      const result = await getExecutor().execute(`realpath "${repoPath}"`, true);
       const repoPathRealPath = result.trim();
       const openRepositoryRealPath = this.openRepositories
         .find(r => pathEquals(r.repository.rootRealPath ?? r.repository.root, repoPathRealPath));
@@ -722,6 +815,10 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
     return this.akspass.registerCredentialsProvider(provider);
   }
 
+  async clearCredentials(host: string): Promise<void> {
+    await this.akspass.clearCredentials(host);
+  }
+
   registerPushErrorHandler(handler: PushErrorHandler): IDisposable {
     this.pushErrorHandlers.add(handler);
     return Disposable.toDisposable(() => this.pushErrorHandlers.delete(handler));
@@ -729,6 +826,30 @@ export class Model implements IRepositoryResolver, IRemoteSourcePublisherRegistr
 
   getPushErrorHandlers(): PushErrorHandler[] {
     return [...this.pushErrorHandlers];
+  }
+
+  getUnsafeRepositoryPath(repository: string): string | undefined {
+    return this._unsafeRepositoriesManager.getRepositoryPath(repository);
+  }
+
+  deleteUnsafeRepository(repository: string): boolean {
+    return this._unsafeRepositoriesManager.deleteRepository(repository);
+  }
+
+  private async showUnsafeRepositoryNotification(): Promise<void> {
+    if (this.repositories.length === 0) {
+      return;
+    }
+
+    const message = this.unsafeRepositories.length === 1 ?
+      'The git repository in the current folder is potentially unsafe as the folder is owned by someone other than the current user.' :
+      'The git repositories in the current folder are potentially unsafe as the folders are owned by someone other than the current user.';
+
+    const manageUnsafeRepositories = item('Manage Unsafe Repositories');
+    const choice = await showDialogMessage('ERROR', message, manageUnsafeRepositories);
+    if (choice === manageUnsafeRepositories) {
+      editorManager.editor.execCommand('git.manageUnsafeRepositories');
+    }
   }
 
   dispose(): void {

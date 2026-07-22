@@ -63,11 +63,16 @@ interface IGitConfig {
   readonly autofetchPeriod: number;
   readonly detectSubmodules: boolean;
   readonly detectSubmodulesLimit: number;
-  readonly useInotifywait: boolean;
   readonly decorationsEnabled: boolean;
   readonly promptToSaveFilesBeforeStash: 'always' | 'staged' | 'never';
   readonly useCommitInputAsStashMessage: boolean;
   readonly openDiffOnClick: boolean;
+  readonly showDecorationInFileTree: boolean;
+  readonly refreshOnSaveFile: boolean;
+  readonly optimisticUpdate: boolean;
+  readonly detectWorktrees: boolean;
+  readonly detectWorktreesLimit: number;
+  readonly showCommitHistoryResourceGroup: boolean;
 }
 
 declare namespace Acode {
@@ -82,6 +87,23 @@ interface Window {
     packageName: string;
   }
 }
+
+interface Cordova {
+  exec: Function;
+}
+
+interface Terminal {
+  isInstalled(): Promise<boolean>;
+}
+
+interface SDCard {
+  watchFile(src: string, listener: () => void): { unwatch: () => void };
+}
+
+declare const Terminal: Terminal;
+declare const strings: { [key: string]: string }
+declare const app: HTMLElement;
+declare var sdcard: SDCard;
 
 declare module 'diff' {
   interface Change {

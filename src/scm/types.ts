@@ -19,14 +19,13 @@ export const defualtScmConfig: ISCMConfig = {
 export interface ISCMResourceDecoration {
   icon?: string;
   strikeThrough?: boolean;
-  letter?: string;
-  color?: string;
 }
 
 export interface ISCMResource {
   readonly resourceGroup: ISCMResourceGroup;
   readonly sourceUri: string;
   readonly decorations: ISCMResourceDecoration;
+  readonly contextValue: string | undefined;
   open(): boolean;
 }
 
@@ -39,6 +38,7 @@ export interface ISCMResourceGroup {
   readonly onDidChangeResources: Event<void>;
 
   readonly label: string;
+  contextValue: string | undefined;
   readonly hideWhenEmpty?: boolean;
 
   readonly onDidChange: Event<void>;
@@ -59,6 +59,7 @@ export interface ISCMProvider extends IDisposable {
   readonly rootUri?: string;
   readonly icon?: string;
   readonly count?: number;
+  readonly contextValue?: string;
   readonly commandActions: ISCMCommandAction[] | undefined;
   readonly actionButton: ISCMActionButtonDescriptor | undefined;
 }
@@ -122,6 +123,7 @@ export interface ISCMService {
 export interface ISCMCommandAction {
   readonly id: string;
   readonly title: string;
+  readonly icon?: string;
   arguments?: unknown[];
 }
 
@@ -130,10 +132,12 @@ export interface ISCMMenuItemAction {
   readonly title: string;
   readonly submenu: boolean;
   readonly enabled: boolean;
+  readonly icon?: string,
   content(): string;
 }
 
 export interface ISCMMenu extends IDisposable {
+  readonly context: SCMMenuContext;
   readonly onDidChange: Event<void>;
   getPrimaryActions(): ISCMMenuItemAction[];
   getSecondaryActions(): ISCMMenuItemAction[];
@@ -147,7 +151,7 @@ export interface ISCMRepositoryMenus {
   getResourceGroupMenu(group: ISCMResourceGroup): ISCMMenu;
   getResourceMenu(resource: ISCMResource): ISCMMenu;
   getResourceFolderMenu(group: ISCMResourceGroup): ISCMMenu;
-  getSubmenu(submenu: string): ISCMMenu;
+  getSubmenu(menu: ISCMMenu, submenu: string): ISCMMenu;
 }
 
 export interface ISCMMenus {
@@ -167,6 +171,9 @@ export interface SCMMenuContext {
   scmProviderRootUri?: string;
   scmProviderHasRoorUri?: boolean;
   scmResourceGroup?: string;
+  scmResourceGroupState?: string;
+  scmResourceState?: string;
+  scmProviderContext?: string;
 }
 
 export interface ISCMMenuService {
@@ -269,8 +276,7 @@ export type SCMRawResource = [
   string /* resourceUri */,
   string | undefined /* icon */,
   boolean /* strike through*/,
-  string /* letter */,
-  string /* color */
+  string | undefined /* context value */
 ];
 
 export type SCMRawResourceSplice = [
@@ -288,6 +294,7 @@ export interface SCMProviderFeatures {
   count?: number;
   commandActions?: ISCMCommandAction[];
   actionButton?: ISCMActionButtonDescriptor;
+  contextValue?: string;
 }
 
 export interface SCMArgumentProcessor {

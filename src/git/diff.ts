@@ -1,24 +1,22 @@
-import * as Diff from 'diff';
-import './diff.scss';
-import { getModeForFile } from './utils';
+import { foldGutter } from "@codemirror/language";
+import { unifiedMergeView } from "@codemirror/merge";
+import { EditorState } from "@codemirror/state";
+import {
+  drawSelection,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  lineNumbers,
+} from "@codemirror/view";
+import * as Diff from "diff";
+import "./diff.scss";
+import { fromGitUri, isGitUri } from "./uri";
 
-const EditorFile = acode.require('EditorFile');
-const Url = acode.require('Url');
-const fsOperation = acode.require('fsOperation');
-const Range = ace.require('ace/range').Range;
-
-type DiffEditorFile = Acode.EditorFile & { diff: { additions: number, deletions: number }; };
-
-interface Marker {
-  start: number;
-  end: number;
-  type: 'added' | 'deleted';
-}
-
-interface Line {
-  oldLine: string | number;
-  newLine: string | number;
-}
+const EditorFile = acode.require("EditorFile");
+const fsOperation = acode.require("fsOperation");
+const settings = acode.require("settings");
+const editorThemes = acode.require("editorThemes");
+const editorLanguages = acode.require("editorLanguages");
 
 export interface DiffOptions {
   oldUri: string;
@@ -26,29 +24,19 @@ export interface DiffOptions {
   title: string;
 }
 
-function createDiffEditorFile(name: string, options: Acode.FileOptions): DiffEditorFile {
-  return new EditorFile(name, options) as DiffEditorFile;
-}
-
-function isDiffEditorFile(file: unknown): file is DiffEditorFile {
-  if (!(file instanceof EditorFile)) {
-    return false;
+function toFileUri(uri: string) {
+  if (!isGitUri(uri)) {
+    return uri;
   }
 
-  return typeof (<DiffEditorFile>file).diff === 'object' &&
-    typeof (<DiffEditorFile>file).diff.additions === 'number' &&
-    typeof (<DiffEditorFile>file).diff.deletions === 'number'
+  return fromGitUri(uri).path;
 }
 
 export class UnifiedDiff {
-
   private readonly oldUri: string;
   private readonly newUri: string;
   private readonly title: string;
 
-  private markers: Marker[] = [];
-  private lines: Line[] = [];
-  private content: string = '';
   private additions: number = 0;
   private deletions: number = 0;
 
@@ -59,153 +47,135 @@ export class UnifiedDiff {
   }
 
   public async show(): Promise<void> {
-    const oldText = await fsOperation(this.oldUri).readFile('utf-8');
-    const newText = await fsOperation(this.newUri).readFile('utf-8');
-    this.generateDiff(oldText, newText);
-    this.renderEditor();
-    this.updateStats();
+    const oldText = await fsOperation(this.oldUri).readFile("utf-8");
+    const newText = await fsOperation(this.newUri).readFile("utf-8");
+
+    await this.showDiff(oldText, newText);
   }
 
-  private renderEditor(): void {
-    const diffEditorFile = createDiffEditorFile(this.title, {
-      text: this.content,
-      cursorPos: { row: -1, column: 0 },
-      render: true,
-      isUnsaved: false,
-      editable: false
+  private async showDiff(
+    oldText: string,
+    newText: string,
+  ): Promise<void> {
+    const container = document.createElement("div");
+    container.className = "codemirror-merge-view-container";
+
+    // Calculate additions and deletions for stats
+    const diffs = Diff.diffLines(oldText, newText, { newlineIsToken: false });
+    this.additions = 0;
+    this.deletions = 0;
+    diffs.forEach((diff) => {
+      if (diff.added) this.additions += diff.count || 0;
+      if (diff.removed) this.deletions += diff.count || 0;
     });
 
-    diffEditorFile.diff = { additions: this.additions, deletions: this.deletions };
-    diffEditorFile.setMode(getModeForFile(Url.basename(this.oldUri)!));
+    const settingsValue = settings.value as any;
+    const activeThemeId = settingsValue.editorTheme;
+    const themeEntry = editorThemes?.get(activeThemeId);
+    const themeExtensions =
+      themeEntry && typeof (themeEntry as any).getExtension === "function"
+        ? (themeEntry as any).getExtension()
+        : [];
 
-    const session = diffEditorFile.session;
-    session.gutterRenderer = {
-      getWidth: () => 50,
-      getText: (session: any, row: any) => {
-        const map = this.lines[row];
-        if (!map) { return ''; }
-        const oldNum = map.oldLine.toString().padStart(2);
-        const newNum = map.newLine.toString().padStart(2);
-        return oldNum + ' ' + newNum;
+    const getFontSettingsExtension = () => {
+      const fontSize = settingsValue.fontSize || "12px";
+      const lineHeight = settingsValue.lineHeight || 1.5;
+      const font = settingsValue.editorFont || "Roboto Mono";
+      const fontFamily = `${font}, Noto Mono, Monaco, monospace`;
+      return EditorView.theme({
+        "&": { fontSize, lineHeight: String(lineHeight) },
+        ".cm-scroller": {
+          fontFamily,
+        },
+      });
+    };
+
+    const wrapExtension = settingsValue.textWrap
+      ? [EditorView.lineWrapping]
+      : [];
+
+    const showLineNumbers = settingsValue.linenumbers !== false;
+    const lineNumberExtensions = showLineNumbers
+      ? [lineNumbers(), highlightActiveLineGutter()]
+      : [];
+
+    const showFolding = settingsValue.codeFolding !== false;
+    const foldingExtensions = showFolding ? [foldGutter()] : [];
+
+    const showActiveLine = settingsValue.highlightActiveLine !== false;
+    const activeLineExtensions = showActiveLine ? [highlightActiveLine()] : [];
+
+    // Resolve language support for syntax highlighting
+    let languageExt: any = [];
+    const mode = (editorLanguages as any)?.getForPath(toFileUri(this.oldUri));
+    if (mode && typeof mode.languageExtension === "function") {
+      try {
+        languageExt = await Promise.resolve(mode.languageExtension());
+      } catch (e) {
+        console.error("Failed to resolve language extension for diff:", e);
+      }
+    }
+
+    const editorExtensions = [
+      ...(themeExtensions as any),
+      getFontSettingsExtension(),
+      ...wrapExtension,
+      ...lineNumberExtensions,
+      ...foldingExtensions,
+      ...activeLineExtensions,
+      drawSelection(),
+      ...(Array.isArray(languageExt) ? languageExt : [languageExt]),
+      unifiedMergeView({
+        original: oldText,
+        mergeControls: false,
+        collapseUnchanged: {
+          margin: 3,
+          minSize: 4,
+        },
+      }),
+      EditorState.readOnly.of(true),
+      EditorView.contentAttributes.of({
+        inputmode: "none"
+      })
+    ];
+
+    const editorView = new EditorView({
+      state: EditorState.create({
+        doc: newText,
+        extensions: editorExtensions,
+      }),
+      parent: container,
+    });
+
+    const diffEditorFile = new EditorFile(this.title, {
+      type: "terminal",
+      content: container,
+      render: true,
+      isUnsaved: false,
+      editable: false,
+      hideQuickTools: true
+    });
+
+    this.updateStats();
+
+    const onSwitchFile = (file: any) => {
+      if (file === diffEditorFile) {
+        setTimeout(() => this.updateStats(), 0);
       }
     };
 
-    removeMarkers(session);
-    this.markers.forEach(marker => addMarker(session, marker));
-
-    const editor = editorManager.editor as any;
-    editor.setOption('highlightActiveLine', false);
-
-    const onSwitchFile = (file: DiffEditorFile) => {
-      if (isDiffEditorFile(file)) {
-        editor.setOption('highlightActiveLine', false);
-        if (diffEditorFile.editable) {
-          diffEditorFile.editable = false;
-        }
-
-        if (file === diffEditorFile) {
-          setTimeout(() => this.updateStats(), 0);
-        }
-      } else {
-        editor.setOption('highlightActiveLine', true);
-      }
-    }
-
-    const onFocus = () => {
-      const activeFile = editorManager.activeFile;
-      if (isDiffEditorFile(activeFile) && activeFile === diffEditorFile) {
-        editor.blur();
-      }
-    }
-
     const onClose = () => {
-      editor.setOption('highlightActiveLine', true);
-      this.markers = [];
-      this.lines = [];
-      editorManager.off('switch-file', onSwitchFile);
-      editor.off('focus', onFocus);
-      diffEditorFile.off('close', onClose);
-    }
+      editorView.destroy();
+      editorManager.off("switch-file", onSwitchFile);
+      diffEditorFile.off("close", onClose);
+    };
 
-    editorManager.on('switch-file', onSwitchFile);
-    editor.on('focus', onFocus);
-    diffEditorFile.on('close', onClose);
-  }
-
-  private generateDiff(oldText: string, newText: string): void {
-    const diffs = Diff.diffLines(oldText, newText, { newlineIsToken: false });
-
-    let currentLine: number = 0;
-    let oldLineCounter: number = 1;
-    let newLineCounter: number = 1;
-
-    diffs.forEach(diff => {
-      const lines = diff.value.split('\n');
-      if (lines.length > 0 && lines[lines.length - 1] === '') {
-        lines.pop();
-      }
-
-      if (diff.removed) {
-        this.deletions += diff.count;
-
-        lines.forEach(line => {
-          this.content += line + "\n";
-          this.markers.push({ start: currentLine, end: currentLine + 1, type: 'deleted' });
-          this.lines.push({ oldLine: oldLineCounter, newLine: '' });
-
-          oldLineCounter++;
-          currentLine++;
-        });
-      } else if (diff.added) {
-        this.additions += diff.count;
-
-        lines.forEach(line => {
-          this.content += line + "\n";
-          this.markers.push({ start: currentLine, end: currentLine + 1, type: 'added' });
-          this.lines.push({ newLine: newLineCounter, oldLine: '' });
-
-          newLineCounter++;
-          currentLine++;
-        });
-      } else {
-        lines.forEach(line => {
-          this.content += line + "\n";
-          this.lines.push({ oldLine: oldLineCounter, newLine: newLineCounter });
-
-          oldLineCounter++;
-          newLineCounter++;
-          currentLine++;
-        });
-      }
-    });
+    editorManager.on("switch-file", onSwitchFile);
+    diffEditorFile.on("close", onClose);
   }
 
   private updateStats(): void {
     const header = editorManager.header as HTMLElement & { subText: string };
     header.subText = `+${this.additions} additions, -${this.deletions} deletions`;
-  }
-}
-
-function removeMarkers(session: Ace.EditSession): void {
-  const markers = session.getMarkers();
-  for (let id in markers) {
-    if (markers[id].clazz.indexOf('gh-') > -1) {
-      session.removeMarker(Number(id));
-    };
-  }
-  const len = session.getLength();
-  for (let i = 0; i < len; i++) {
-    session.removeGutterDecoration(i, 'gh-added-gutter');
-    session.removeGutterDecoration(i, 'gh-deleted-gutter');
-  }
-}
-
-function addMarker(session: Ace.EditSession, marker: Marker): void {
-  const className = marker.type === 'added' ? 'gh-added-line' : 'gh-deleted-line';
-  const gutterName = marker.type === 'added' ? 'gh-added-gutter' : 'gh-deleted-gutter';
-  for (let i = marker.start; i < marker.end; i++) {
-    const range = new Range(i, 0, i, 20000);
-    session.addMarker(range, className, 'fullLine');
-    session.addGutterDecoration(i, gutterName);
   }
 }

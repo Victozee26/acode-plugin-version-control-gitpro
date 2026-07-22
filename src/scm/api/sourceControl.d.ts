@@ -6,6 +6,7 @@ export interface SourceControl {
   readonly rootUri?: string;
   readonly inputBox: SourceControlInputBox;
   count?: number;
+  contextValue?: string;
   commandActions: SourceControlCommandAction[] | undefined;
   actionButton: SourceControlActionButton | undefined;
   readonly selected: boolean;
@@ -26,6 +27,7 @@ export interface SourceControlResourceGroup {
   readonly id: string;
   label: string;
   hideWhenEmpty?: boolean;
+  contextValue?: string;
   resourceStates: SourceControlResourceState[];
   dispose(): void;
 }
@@ -34,13 +36,12 @@ export interface SourceControlResourceState {
   readonly resourceUri: string;
   decorations?: SourceControlResourceDecorations;
   command?: SourceControlCommandAction;
+  readonly contextValue?: string;
 }
 
 export interface SourceControlResourceDecorations {
   icon?: string;
   strikeThrough?: boolean;
-  letter?: string;
-  color?: string;
 }
 
 export interface SourceControlActionButton {
