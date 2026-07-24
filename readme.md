@@ -118,7 +118,7 @@ changes.resourceStates = [
 ];
 ```
 
-For a complete API reference see the [API reference documentation](https://raw.githubusercontent.com/dikidjatar/acode-plugin-version-control-gitpro/main/docs/api-reference.md).
+For a complete API reference see the [API reference documentation](/docs/api-reference.md).
 
 See also type definition files:
 
